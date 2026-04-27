@@ -1,0 +1,2 @@
+dataset,judges_k,sample_size_p,avg_corr_s_proposed,sd_corr_s_proposed,avg_corr_rank_proposed,sd_corr_rank_proposed,n_valid_proposed,avg_corr_s_zhou_github,sd_corr_s_zhou_github,avg_corr_rank_zhou_github,sd_corr_rank_zhou_github,n_valid_zhou_github,avg_corr_s_standard_btl,sd_corr_s_standard_btl,avg_corr_rank_standard_btl,sd_corr_rank_standard_btl,n_valid_standard_btl
+mtbench,1,100,0.777527113908129,0.0,0.7142857142857143,0.0,1,0.7940707989271499,0.0,0.48571428571428577,0.0,1,0.7920993148129987,0.0,0.48571428571428577,0.0,1

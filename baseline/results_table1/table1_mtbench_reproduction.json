@@ -1,0 +1,171 @@
+{
+  "paper": "A Judge-Aware Ranking Framework for Evaluating Large Language Models without Ground Truth",
+  "table": "Table 1",
+  "dataset": "MT-Bench",
+  "data_path": "C:\\Users\\13376\\Desktop\\Ranking\\real_data_0420\\data\\judge_results_10k_mtbench.json",
+  "summary": {
+    "source_path": "C:\\Users\\13376\\Desktop\\Ranking\\real_data_0420\\data\\judge_results_10k_mtbench.json",
+    "num_items": 5,
+    "num_judges": 20,
+    "usable_records": 6499,
+    "label_counts": {
+      "a": 3270,
+      "b": 2710,
+      "c": 519,
+      "unknown": 204,
+      "other": 0
+    },
+    "tie_count": 519,
+    "unknown_count": 204
+  },
+  "fit_results": {
+    "standard_btl": {
+      "error": null,
+      "elapsed_seconds": 0.004505199999999987,
+      "fit_info": {
+        "n_iter": 7,
+        "converged": true,
+        "nll": 3517.9503411327846
+      },
+      "mu": [
+        -1.160059234959664,
+        -0.5135582622884715,
+        -0.1046355226542775,
+        0.7700772909343581,
+        1.0081757289680549
+      ],
+      "gamma": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "weighted_mle": {
+      "error": null,
+      "elapsed_seconds": 0.6172230999999999,
+      "fit_info": {
+        "n_iter": 54,
+        "converged": true,
+        "nll": 3276.7464875336404
+      },
+      "mu": [
+        -1.0024472135031604,
+        -0.5266035298382242,
+        -0.04687736193738352,
+        0.6511074842509202,
+        0.9248206210278481
+      ],
+      "gamma": [
+        1.7193198093101811,
+        1.8959229729022582,
+        2.120369742617595,
+        1.070027095373904,
+        0.3434118193007068,
+        0.5219178898607805,
+        1.2418205897031835,
+        1.0874917944171538,
+        1.971527355444013,
+        1.6918983498209665,
+        0.08272950521987281,
+        1.8597050755007758,
+        1.3956620771724666,
+        0.38885193687100295,
+        0.5745910705767617,
+        1.7976875064903002,
+        1.887201745767309,
+        1.6173063685601043,
+        1.8795588617138639,
+        0.3384762897612196
+      ]
+    }
+  },
+  "rows": [
+    {
+      "model_key": "llama-13b",
+      "model": "LLaMA-13B",
+      "tokens": "1T",
+      "mmlu": 47.0,
+      "truthfulqa": 0.26,
+      "mt_bench_score": 2.61,
+      "paper_s_u": -1.27,
+      "paper_s_w": -1.12,
+      "reproduced_s_u": -1.16,
+      "reproduced_s_w": -1.0,
+      "delta_s_u": 0.11,
+      "delta_s_w": 0.12
+    },
+    {
+      "model_key": "alpaca-13b",
+      "model": "Alpaca-13B",
+      "tokens": "4.4M",
+      "mmlu": 48.1,
+      "truthfulqa": 0.3,
+      "mt_bench_score": 4.53,
+      "paper_s_u": -0.62,
+      "paper_s_w": -0.54,
+      "reproduced_s_u": -0.51,
+      "reproduced_s_w": -0.53,
+      "delta_s_u": 0.11,
+      "delta_s_w": 0.01
+    },
+    {
+      "model_key": "vicuna-13b-v1.2",
+      "model": "Vicuna-13B (all)",
+      "tokens": "370M",
+      "mmlu": 52.1,
+      "truthfulqa": 0.35,
+      "mt_bench_score": 6.39,
+      "paper_s_u": -0.29,
+      "paper_s_w": -0.25,
+      "reproduced_s_u": -0.1,
+      "reproduced_s_w": -0.05,
+      "delta_s_u": 0.19,
+      "delta_s_w": 0.2
+    },
+    {
+      "model_key": "gpt-3.5-turbo",
+      "model": "GPT-3.5",
+      "tokens": "-",
+      "mmlu": 70.0,
+      "truthfulqa": "-",
+      "mt_bench_score": 7.94,
+      "paper_s_u": 0.51,
+      "paper_s_w": 0.43,
+      "reproduced_s_u": 0.77,
+      "reproduced_s_w": 0.65,
+      "delta_s_u": 0.26,
+      "delta_s_w": 0.22
+    },
+    {
+      "model_key": "gpt-4",
+      "model": "GPT-4",
+      "tokens": "-",
+      "mmlu": 86.4,
+      "truthfulqa": "-",
+      "mt_bench_score": 8.99,
+      "paper_s_u": 0.83,
+      "paper_s_w": 0.73,
+      "reproduced_s_u": 1.01,
+      "reproduced_s_w": 0.92,
+      "delta_s_u": 0.18,
+      "delta_s_w": 0.19
+    }
+  ]
+}

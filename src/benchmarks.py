@@ -2,6 +2,7 @@ import numpy as np
 from scipy.optimize import minimize
 
 from .models import estimate_parameters, sigmoid
+from .uq import pooled_btl_uq_summary, zhou_uq_summary
 
 
 EPS = 1e-10
@@ -75,12 +76,17 @@ def fit_standard_btl(N, K, n_ijk, y_ijk, maxiter=800):
     U = np.zeros((K, 0), dtype=float)
     V = np.zeros((N, 0), dtype=float)
     S = np.outer(gamma, mu)
+    try:
+        uq = pooled_btl_uq_summary(mu, n_ijk, K)
+    except Exception as exc:
+        uq = {"method": "pooled_btl_asymptotic_delta", "error": str(exc)}
     return {
         "mu": mu,
         "gamma": gamma,
         "U": U,
         "V": V,
         "S": S,
+        "uq": uq,
         "fit_info": {"n_iter": int(result.nit), "converged": bool(result.success), "nll": float(result.fun)},
     }
 
@@ -192,11 +198,16 @@ def fit_zhou_github(N, K, n_ijk, y_ijk, max_iter=10, tol=1e-5):
     U = np.zeros((K, 0), dtype=float)
     V = np.zeros((N, 0), dtype=float)
     S = np.outer(gamma, mu)
+    try:
+        uq = zhou_uq_summary(mu, gamma, n_ijk)
+    except Exception as exc:
+        uq = {"method": "zhou_asymptotic_delta", "error": str(exc)}
     return {
         "mu": mu,
         "gamma": gamma,
         "U": U,
         "V": V,
         "S": S,
+        "uq": uq,
         "fit_info": fit_info,
     }

@@ -480,6 +480,7 @@ def serialize_method_result(fit_result, test_records, item_names):
         "gamma": [float(x) for x in fit["gamma"]],
         "U": np.asarray(fit["U"], dtype=float).tolist(),
         "V": np.asarray(fit["V"], dtype=float).tolist(),
+        "uq": fit.get("uq"),
         "fit_info": fit["fit_info"],
         "elapsed_seconds": fit_result.get("elapsed_seconds"),
         "model_rank": fit_result.get("model_rank"),

@@ -202,6 +202,18 @@ def round_or_none(value, ndigits=2):
     return round(float(value), ndigits)
 
 
+def ci_bound(fit, key, idx, bound):
+    if fit is None:
+        return None
+    uq = fit.get("uq") or {}
+    if uq.get("error") is not None:
+        return None
+    intervals = uq.get(key) or []
+    if idx >= len(intervals):
+        return None
+    return intervals[idx].get(bound)
+
+
 
 def build_rows(fit_results, item_names):
     rows = []
@@ -220,7 +232,11 @@ def build_rows(fit_results, item_names):
             "paper_s_u": paper["paper_s_u"],
             "paper_s_w": paper["paper_s_w"],
             "reproduced_s_u": None if standard_fit is None else round_or_none(standard_fit["mu"][idx]),
+            "reproduced_s_u_CI_lower": round_or_none(ci_bound(standard_fit, "s_ci", idx, "lower")),
+            "reproduced_s_u_CI_upper": round_or_none(ci_bound(standard_fit, "s_ci", idx, "upper")),
             "reproduced_s_w": None if weighted_fit is None else round_or_none(weighted_fit["mu"][idx]),
+            "reproduced_s_w_CI_lower": round_or_none(ci_bound(weighted_fit, "s_ci", idx, "lower")),
+            "reproduced_s_w_CI_upper": round_or_none(ci_bound(weighted_fit, "s_ci", idx, "upper")),
         }
         if row["reproduced_s_u"] is not None:
             row["delta_s_u"] = round_or_none(row["reproduced_s_u"] - row["paper_s_u"])
@@ -246,7 +262,11 @@ def write_csv(rows, output_path):
         "paper_s_u",
         "paper_s_w",
         "reproduced_s_u",
+        "reproduced_s_u_CI_lower",
+        "reproduced_s_u_CI_upper",
         "reproduced_s_w",
+        "reproduced_s_w_CI_lower",
+        "reproduced_s_w_CI_upper",
         "delta_s_u",
         "delta_s_w",
     ]
@@ -279,6 +299,7 @@ def run(output_dir):
                 "fit_info": None if fit_result["fit"] is None else fit_result["fit"]["fit_info"],
                 "mu": None if fit_result["fit"] is None else [float(x) for x in fit_result["fit"]["mu"]],
                 "gamma": None if fit_result["fit"] is None else [float(x) for x in fit_result["fit"]["gamma"]],
+                "uq": None if fit_result["fit"] is None else fit_result["fit"].get("uq"),
             }
             for method_name, fit_result in fit_results.items()
         },

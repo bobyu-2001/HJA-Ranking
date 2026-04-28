@@ -285,7 +285,7 @@ def fit_all_methods_safe(
     y_ijk,
     tau=30.0,
     skipped_methods=None,
-    max_iter=10,
+    max_iter=500,
     proposed_max_steps=40,
     proposed_tol=5e-5,
     proposed_inner_maxiter=500,

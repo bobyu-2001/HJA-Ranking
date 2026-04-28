@@ -57,7 +57,7 @@ def ensure_results_dir():
 def fit_all_methods(N, K, r_model, n_ijk, y_ijk, tau=30.0):
     return {
         "proposed": fit_proposed(N, K, r_model, n_ijk, y_ijk, max_steps=2000, tol=5e-5, tau=tau),
-        "zhou_github": fit_zhou_github(N, K, n_ijk, y_ijk),
+        "zhou_github": fit_zhou_github(N, K, n_ijk, y_ijk, max_iter=1000),
         "standard_btl": fit_standard_btl(N, K, n_ijk, y_ijk),
     }
 
@@ -66,7 +66,7 @@ def fit_all_methods_safe_simulation(N, K, r_model, n_ijk, y_ijk, tau=30.0):
     out = {}
     for method_name, fit_fn in (
         ("proposed", lambda: fit_proposed(N, K, r_model, n_ijk, y_ijk, max_steps=2000, tol=5e-5, tau=tau)),
-        ("zhou_github", lambda: fit_zhou_github(N, K, n_ijk, y_ijk)),
+        ("zhou_github", lambda: fit_zhou_github(N, K, n_ijk, y_ijk, max_iter=1000)),
         ("standard_btl", lambda: fit_standard_btl(N, K, n_ijk, y_ijk)),
     ):
         try:

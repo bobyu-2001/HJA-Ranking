@@ -112,7 +112,7 @@ def _zhou_mle_adam(
     beta1=0.9,
     beta2=0.999,
     eps=1e-6,
-    max_iter=10, # same as main.py:120 in TanXZfra's github
+    max_iter=500,
     tol=1e-5,
 ):
     mu = np.zeros(N, dtype=float)
@@ -181,7 +181,7 @@ def _zhou_mle_adam(
 
 
 
-def fit_zhou_github(N, K, n_ijk, y_ijk, max_iter=10, tol=1e-5):
+def fit_zhou_github(N, K, n_ijk, y_ijk, max_iter=500, tol=1e-5):
     pairs = []
     for k in range(K):
         for i in range(N):

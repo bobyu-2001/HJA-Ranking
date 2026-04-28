@@ -506,6 +506,31 @@ def score_contrast_gradient(gamma, mu, U, V, k, i, j):
 
 
 
+def score_entry_gradient(gamma, mu, U, V, k, i):
+    # Gradient of S_ki = gamma_k * mu_i + U_k^T V_i in the full local
+    # coordinates used by the plug-in information matrix.
+    gamma = np.asarray(gamma, dtype=float)
+    mu = np.asarray(mu, dtype=float)
+    U = np.asarray(U, dtype=float)
+    V = np.asarray(V, dtype=float)
+    K = gamma.size
+    N = mu.size
+    r = U.shape[1]
+    if not (0 <= k < K and 0 <= i < N):
+        raise ValueError(f"invalid score entry indices {(k, i)} for K={K}, N={N}")
+    slices = _param_slices(K, N, r)
+    grad = np.zeros(slices["size"], dtype=float)
+    grad[slices["gamma"].start + k] = mu[i]
+    grad[slices["mu"].start + i] = gamma[k]
+    if r > 0:
+        U_offset = slices["U"].start + k * r
+        V_i_offset = slices["V"].start + i * r
+        grad[U_offset : U_offset + r] = V[i, :]
+        grad[V_i_offset : V_i_offset + r] = U[k, :]
+    return grad
+
+
+
 def consensus_contrast_gradient(gamma, mu, U, V, i, j):
     gamma = np.asarray(gamma, dtype=float)
     mu = np.asarray(mu, dtype=float)
@@ -566,6 +591,14 @@ def _evaluate_uq_target(target, gamma, mu, U, V):
             value += U[k, :] @ (V[i, :] - V[j, :])
         grad = score_contrast_gradient(gamma, mu, U, V, k, i, j)
         label = target.get("label", f"S[{k},{i}]-S[{k},{j}]")
+    elif target_type in {"score_entry", "judge_score_entry"}:
+        k = int(target["k"])
+        i = int(target["i"])
+        value = gamma[k] * mu[i]
+        if U.shape[1] > 0:
+            value += U[k, :] @ V[i, :]
+        grad = score_entry_gradient(gamma, mu, U, V, k, i)
+        label = target.get("label", f"S[{k},{i}]")
     elif target_type == "consensus_diff":
         i = int(target["i"])
         j = int(target["j"])

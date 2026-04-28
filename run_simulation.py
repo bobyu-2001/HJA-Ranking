@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import numpy as np
@@ -22,6 +23,14 @@ METHOD_LABELS = {
     "zhou_github": "Zhou github",
     "standard_btl": "Standard BTL",
 }
+
+METHOD_COLORS = {
+    "proposed": "tab:blue",
+    "zhou_github": "tab:orange",
+    "standard_btl": "tab:green",
+}
+
+PRESENTATION_METRICS = ("mse", "spearman", "ndcg", "score_entry_coverage", "sign_accuracy")
 
 
 
@@ -51,6 +60,20 @@ def fit_all_methods(N, K, r_model, n_ijk, y_ijk, tau=30.0):
         "zhou_github": fit_zhou_github(N, K, n_ijk, y_ijk),
         "standard_btl": fit_standard_btl(N, K, n_ijk, y_ijk),
     }
+
+
+def fit_all_methods_safe_simulation(N, K, r_model, n_ijk, y_ijk, tau=30.0):
+    out = {}
+    for method_name, fit_fn in (
+        ("proposed", lambda: fit_proposed(N, K, r_model, n_ijk, y_ijk, max_steps=2000, tol=5e-5, tau=tau)),
+        ("zhou_github", lambda: fit_zhou_github(N, K, n_ijk, y_ijk)),
+        ("standard_btl", lambda: fit_standard_btl(N, K, n_ijk, y_ijk)),
+    ):
+        try:
+            out[method_name] = {"fit": fit_fn(), "error": None}
+        except Exception as exc:
+            out[method_name] = {"fit": None, "error": str(exc)}
+    return out
 
 
 
@@ -389,6 +412,456 @@ def run_uq_coverage_experiment(N, K, r_true, T_list, n_repeats, alpha=0.05):
     return result
 
 
+def compute_ndcg_at_n(mu_true, mu_est):
+    mu_true = np.asarray(mu_true, dtype=float)
+    mu_est = np.asarray(mu_est, dtype=float)
+    N = mu_true.size
+    true_order = np.argsort(-mu_true)
+    true_rank = np.empty(N, dtype=int)
+    true_rank[true_order] = np.arange(1, N + 1)
+    relevance = np.power(2.0, N - true_rank) - 1.0
+
+    pred_order = np.argsort(-mu_est)
+    discounts = 1.0 / np.log2(np.arange(2, N + 2, dtype=float))
+    dcg = float(np.sum(relevance[pred_order] * discounts))
+    ideal_dcg = float(np.sum(relevance[true_order] * discounts))
+    return dcg / ideal_dcg if ideal_dcg > 0 else 1.0
+
+
+def compute_score_mse(S_true, S_est):
+    S_true = np.asarray(S_true, dtype=float)
+    S_est = np.asarray(S_est, dtype=float)
+    return float(np.mean((S_est - S_true) ** 2))
+
+
+def compute_score_sign_accuracy(S_true, S_est):
+    S_true = np.asarray(S_true, dtype=float)
+    S_est = np.asarray(S_est, dtype=float)
+    K, N = S_true.shape
+    total = 0
+    correct = 0
+    for k in range(K):
+        for i in range(N):
+            for j in range(i + 1, N):
+                correct += int(np.sign(S_true[k, i] - S_true[k, j]) == np.sign(S_est[k, i] - S_est[k, j]))
+                total += 1
+    return float(correct / total) if total > 0 else np.nan
+
+
+def score_entry_targets(K, N):
+    return [
+        {"type": "score_entry", "k": k, "i": i}
+        for k in range(K)
+        for i in range(N)
+    ]
+
+
+def proposed_score_entry_ci_matrix(fit, n_ijk, alpha=0.05):
+    K, N = fit["S"].shape
+    targets = score_entry_targets(K, N)
+    uq = uncertainty_quantification(
+        fit["gamma"],
+        fit["mu"],
+        fit["U"],
+        fit["V"],
+        n_ijk,
+        targets,
+        alpha=alpha,
+    )
+    ci_matrix = []
+    cursor = 0
+    for _k in range(K):
+        row = []
+        for _i in range(N):
+            interval = uq["intervals"][cursor]
+            row.append(interval)
+            cursor += 1
+        ci_matrix.append(row)
+    return ci_matrix
+
+
+def get_score_entry_ci_matrix(method_name, fit, n_ijk, alpha=0.05):
+    if method_name == "proposed":
+        return proposed_score_entry_ci_matrix(fit, n_ijk, alpha=alpha)
+    uq = fit.get("uq") or {}
+    if uq.get("error") is not None:
+        raise RuntimeError(uq["error"])
+    ci_matrix = uq.get("S_ci")
+    if ci_matrix is None:
+        raise RuntimeError(f"{method_name} fit did not return S_ci")
+    return ci_matrix
+
+
+def compute_score_entry_coverage(S_true, ci_matrix):
+    S_true = np.asarray(S_true, dtype=float)
+    K, N = S_true.shape
+    covered = []
+    if len(ci_matrix) != K:
+        raise ValueError(f"S_ci row count {len(ci_matrix)} does not match K={K}")
+    for k in range(K):
+        if len(ci_matrix[k]) != N:
+            raise ValueError(f"S_ci column count {len(ci_matrix[k])} does not match N={N}")
+        for i in range(N):
+            interval = ci_matrix[k][i]
+            covered.append(float(interval["lower"] <= S_true[k, i] <= interval["upper"]))
+    return float(np.mean(covered)) if covered else np.nan
+
+
+def compute_presentation_metrics(mu_true, S_true, method_name, fit, n_ijk, alpha=0.05):
+    ranking_metrics = compute_ranking_metrics(mu_true, fit["mu"])
+    ci_matrix = get_score_entry_ci_matrix(method_name, fit, n_ijk, alpha=alpha)
+    return {
+        "mse": compute_score_mse(S_true, fit["S"]),
+        "spearman": float(ranking_metrics["spearman"]),
+        "ndcg": compute_ndcg_at_n(mu_true, fit["mu"]),
+        "score_entry_coverage": compute_score_entry_coverage(S_true, ci_matrix),
+        "sign_accuracy": compute_score_sign_accuracy(S_true, fit["S"]),
+    }
+
+
+def make_presentation_parameters(N, K, r_true, random_seed, dgp, heterogeneity_scale=1.0):
+    mu_true, gamma_true, U_true, V_true = generate_true_parameters(
+        N,
+        K,
+        r_true,
+        random_seed=random_seed,
+        heterogeneity_scale=heterogeneity_scale,
+    )
+    if dgp == "zhou":
+        U_true = np.zeros((K, 0), dtype=float)
+        V_true = np.zeros((N, 0), dtype=float)
+    elif dgp != "ours":
+        raise ValueError(f"unknown presentation DGP: {dgp}")
+    return mu_true, gamma_true, U_true, V_true
+
+
+def summarize_metric_records(records):
+    summary = {}
+    for method_name in METHOD_LABELS:
+        summary[method_name] = {}
+        for metric_name in PRESENTATION_METRICS:
+            values = np.asarray(
+                [
+                    record["metrics"][method_name][metric_name]
+                    for record in records
+                    if method_name in record["metrics"]
+                    and metric_name in record["metrics"][method_name]
+                    and np.isfinite(record["metrics"][method_name][metric_name])
+                ],
+                dtype=float,
+            )
+            if values.size == 0:
+                summary[method_name][metric_name] = {
+                    "n_success": 0,
+                    "mean": None,
+                    "std": None,
+                    "se": None,
+                    "mc_ci95": None,
+                }
+                continue
+            std = float(np.std(values, ddof=1)) if values.size > 1 else 0.0
+            se = float(std / np.sqrt(values.size)) if values.size > 0 else None
+            summary[method_name][metric_name] = {
+                "n_success": int(values.size),
+                "mean": float(np.mean(values)),
+                "std": std,
+                "se": se,
+                "mc_ci95": float(1.96 * se),
+            }
+    return summary
+
+
+def run_presentation_condition(
+    N,
+    K,
+    r_true,
+    T,
+    n_repeats,
+    dgp,
+    heterogeneity_scale=1.0,
+    seed_offset=7000,
+    alpha=0.05,
+    tau=30.0,
+):
+    records = []
+    failures = []
+    for rep in range(n_repeats):
+        seed = int(seed_offset + 1000 * rep)
+        mu_true, gamma_true, U_true, V_true = make_presentation_parameters(
+            N,
+            K,
+            r_true,
+            random_seed=seed,
+            dgp=dgp,
+            heterogeneity_scale=heterogeneity_scale,
+        )
+        S_true = compute_score_matrix(mu_true, gamma_true, U_true, V_true)
+        comparisons = generate_balanced_comparisons(S_true, T, random_seed=seed + 1)
+        n_ijk, y_ijk = comparisons_to_aggregated(comparisons, N, K)
+        fit_results = fit_all_methods_safe_simulation(N, K, r_true, n_ijk, y_ijk, tau=tau)
+
+        record = {
+            "rep": int(rep),
+            "seed": seed,
+            "T": int(T),
+            "heterogeneity_scale": float(heterogeneity_scale),
+            "u_operator_norm": float(np.linalg.norm(U_true, ord=2)) if U_true.size else 0.0,
+            "metrics": {},
+        }
+        for method_name, result in fit_results.items():
+            if result["fit"] is None:
+                failures.append({"rep": int(rep), "seed": seed, "method": method_name, "error": result["error"]})
+                continue
+            try:
+                record["metrics"][method_name] = compute_presentation_metrics(
+                    mu_true,
+                    S_true,
+                    method_name,
+                    result["fit"],
+                    n_ijk,
+                    alpha=alpha,
+                )
+            except Exception as exc:
+                failures.append({"rep": int(rep), "seed": seed, "method": method_name, "error": str(exc)})
+        records.append(record)
+
+    return {
+        "T": int(T),
+        "heterogeneity_scale": float(heterogeneity_scale),
+        "x_u_operator_norm": float(np.mean([record["u_operator_norm"] for record in records])) if records else 0.0,
+        "raw": records,
+        "summary": summarize_metric_records(records),
+        "failures": failures,
+    }
+
+
+def presentation_series_from_conditions(conditions, x_key):
+    series = {method_name: {metric: {"mean": [], "err": [], "n_success": []} for metric in PRESENTATION_METRICS} for method_name in METHOD_LABELS}
+    x_values = []
+    for condition in conditions:
+        x_values.append(condition[x_key])
+        for method_name in METHOD_LABELS:
+            for metric_name in PRESENTATION_METRICS:
+                metric_summary = condition["summary"][method_name][metric_name]
+                series[method_name][metric_name]["mean"].append(np.nan if metric_summary["mean"] is None else metric_summary["mean"])
+                series[method_name][metric_name]["err"].append(np.nan if metric_summary["mc_ci95"] is None else metric_summary["mc_ci95"])
+                series[method_name][metric_name]["n_success"].append(metric_summary["n_success"])
+    return np.asarray(x_values, dtype=float), series
+
+
+def plot_metric_panel(ax, x_values, series, metric_name, x_label, y_label, title, ylim=None):
+    for method_name in METHOD_LABELS:
+        ax.errorbar(
+            x_values,
+            series[method_name][metric_name]["mean"],
+            yerr=series[method_name][metric_name]["err"],
+            marker="o",
+            linewidth=1.6,
+            capsize=3,
+            label=METHOD_LABELS[method_name],
+            color=METHOD_COLORS[method_name],
+        )
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.set_title(title)
+    if ylim is not None:
+        ax.set_ylim(*ylim)
+    ax.grid(True, alpha=0.3)
+
+
+def plot_ranking_panel(ax, x_values, series, x_label, title):
+    right_ax = ax.twinx()
+    for method_name in METHOD_LABELS:
+        color = METHOD_COLORS[method_name]
+        ax.errorbar(
+            x_values,
+            series[method_name]["spearman"]["mean"],
+            yerr=series[method_name]["spearman"]["err"],
+            marker="o",
+            linewidth=1.6,
+            capsize=3,
+            color=color,
+            linestyle="-",
+            label=f"{METHOD_LABELS[method_name]} Spearman",
+        )
+        right_ax.errorbar(
+            x_values,
+            series[method_name]["ndcg"]["mean"],
+            yerr=series[method_name]["ndcg"]["err"],
+            marker="s",
+            linewidth=1.4,
+            capsize=3,
+            color=color,
+            linestyle="--",
+            label=f"{METHOD_LABELS[method_name]} NDCG",
+        )
+    ax.set_xlabel(x_label)
+    ax.set_ylabel("Spearman")
+    right_ax.set_ylabel("NDCG@N")
+    ax.set_title(title)
+    ax.set_ylim(0.6, 1)
+    right_ax.set_ylim(0.9, 1)
+    ax.grid(True, alpha=0.3)
+    return right_ax
+
+
+def plot_presentation_grid(summary, save_path, dgp):
+    if dgp == "ours":
+        fig, axes = plt.subplots(2, 4, figsize=(22, 9), squeeze=False)
+        row_specs = [
+            ("ours_sample_size", "T", "Sample size (T)", "Ours DGP: sample size"),
+            ("ours_heterogeneity", "x_u_operator_norm", r"Heterogeneity $||U||_2$", "Ours DGP: heterogeneity"),
+        ]
+    elif dgp == "zhou":
+        fig, axes = plt.subplots(1, 4, figsize=(22, 4.8), squeeze=False)
+        row_specs = [("zhou_sample_size", "T", "Sample size (T)", "Zhou DGP")]
+    else:
+        raise ValueError(f"unknown plot DGP: {dgp}")
+
+    legend_handles = None
+    legend_labels = None
+    for row_idx, (section_key, x_key, x_label, row_title) in enumerate(row_specs):
+        x_values, series = presentation_series_from_conditions(summary[section_key], x_key)
+        plot_metric_panel(axes[row_idx, 0], x_values, series, "mse", x_label, "MSE", f"{row_title}: MSE")
+        ranking_right_ax = plot_ranking_panel(axes[row_idx, 1], x_values, series, x_label, f"{row_title}: ranking")
+        plot_metric_panel(
+            axes[row_idx, 2],
+            x_values,
+            series,
+            "score_entry_coverage",
+            x_label,
+            "Coverage",
+            f"{row_title}: S entry coverage",
+            ylim=(-0.05, 1.05),
+        )
+        axes[row_idx, 2].axhline(0.95, color="black", linestyle="--", linewidth=1.0, alpha=0.7)
+        plot_metric_panel(
+            axes[row_idx, 3],
+            x_values,
+            series,
+            "sign_accuracy",
+            x_label,
+            "Accuracy",
+            f"{row_title}: sign accuracy",
+            ylim=(-0.05, 1.05),
+        )
+        if legend_handles is None:
+            handles_left, labels_left = axes[row_idx, 1].get_legend_handles_labels()
+            handles_right, labels_right = ranking_right_ax.get_legend_handles_labels()
+            legend_handles = handles_left + handles_right
+            legend_labels = labels_left + labels_right
+
+    axes[0, 0].legend(loc="best", fontsize=8)
+    if legend_handles is not None:
+        axes[0, 1].legend(legend_handles, legend_labels, loc="best", fontsize=7)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=200)
+    plt.close(fig)
+    return save_path
+
+
+def plot_presentation_simulation_from_summary(summary_path=None):
+    results_dir = ensure_results_dir()
+    if summary_path is None:
+        summary_path = os.path.join(results_dir, "presentation_simulation_summary.json")
+    if not os.path.exists(summary_path):
+        raise FileNotFoundError(
+            f"presentation summary not found at {summary_path}; run "
+            "`python experiments/run_simulation.py --experiment presentation` first"
+        )
+
+    with open(summary_path, "r", encoding="utf-8") as f:
+        summary = json.load(f)
+
+    ours_path = os.path.join(results_dir, "presentation_ours_dgp_grid.png")
+    zhou_path = os.path.join(results_dir, "presentation_zhou_dgp_grid.png")
+    plot_presentation_grid(summary, ours_path, "ours")
+    plot_presentation_grid(summary, zhou_path, "zhou")
+
+    summary["figures"] = {
+        "ours_dgp_grid": ours_path,
+        "zhou_dgp_grid": zhou_path,
+    }
+    summary["summary_path"] = summary_path
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(to_jsonable(summary), f, indent=2)
+
+    print(f"[presentation plot-only] read {summary_path}", flush=True)
+    print(f"[presentation plot-only] wrote {ours_path}", flush=True)
+    print(f"[presentation plot-only] wrote {zhou_path}", flush=True)
+    return {
+        "summary_path": summary_path,
+        "ours_dgp_grid": ours_path,
+        "zhou_dgp_grid": zhou_path,
+    }
+
+
+def run_presentation_simulation(
+    N=8,
+    K=4,
+    r_true=1,
+    n_repeats=50,
+    T_list=None,
+    scale_list=None,
+    T_fixed=800,
+    alpha=0.05,
+):
+    T_list = [400, 800, 1200, 1600, 2000, 2500, 3000] if T_list is None else [int(T) for T in T_list]
+    scale_list = [0.0, 0.5, 1.0, 2.0] if scale_list is None else [float(scale) for scale in scale_list]
+
+    results = {
+        "settings": {
+            "N": int(N),
+            "K": int(K),
+            "r_true": int(r_true),
+            "n_repeats": int(n_repeats),
+            "T_list": T_list,
+            "scale_list": scale_list,
+            "T_fixed": int(T_fixed),
+            "alpha": float(alpha),
+            "error_bar": "mean +/- 1.96 * standard_error_across_repeats",
+        },
+        "ours_sample_size": [],
+        "ours_heterogeneity": [],
+        "zhou_sample_size": [],
+    }
+
+    for idx, T in enumerate(T_list):
+        print(f"[presentation] ours DGP sample-size T={T}", flush=True)
+        results["ours_sample_size"].append(
+            run_presentation_condition(N, K, r_true, T, n_repeats, "ours", 1.0, seed_offset=710000 + 10000 * idx, alpha=alpha)
+        )
+    for idx, scale in enumerate(scale_list):
+        print(f"[presentation] ours DGP heterogeneity scale={scale}", flush=True)
+        results["ours_heterogeneity"].append(
+            run_presentation_condition(N, K, r_true, T_fixed, n_repeats, "ours", scale, seed_offset=720000 + 10000 * idx, alpha=alpha)
+        )
+    for idx, T in enumerate(T_list):
+        print(f"[presentation] Zhou DGP sample-size T={T}", flush=True)
+        results["zhou_sample_size"].append(
+            run_presentation_condition(N, K, r_true, T, n_repeats, "zhou", 0.0, seed_offset=730000 + 10000 * idx, alpha=alpha)
+        )
+
+    results_dir = ensure_results_dir()
+    ours_path = os.path.join(results_dir, "presentation_ours_dgp_grid.png")
+    zhou_path = os.path.join(results_dir, "presentation_zhou_dgp_grid.png")
+    plot_presentation_grid(results, ours_path, "ours")
+    plot_presentation_grid(results, zhou_path, "zhou")
+
+    results["figures"] = {
+        "ours_dgp_grid": ours_path,
+        "zhou_dgp_grid": zhou_path,
+    }
+    summary_path = os.path.join(results_dir, "presentation_simulation_summary.json")
+    results["summary_path"] = summary_path
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(to_jsonable(results), f, indent=2)
+    print(f"[presentation] wrote {summary_path}", flush=True)
+    print(f"[presentation] wrote {ours_path}", flush=True)
+    print(f"[presentation] wrote {zhou_path}", flush=True)
+    return results
+
+
 
 def run_final_parameter_export(N, K, r_true, T_fixed, seed=79):
     mu_true, gamma_true, U_true, V_true = generate_true_parameters(N, K, r_true, random_seed=seed)
@@ -481,5 +954,46 @@ def run_benchmark(experiments_to_run=
         print(json.dumps(final_parameters, indent=2))
 
 
+def main():
+    parser = argparse.ArgumentParser(description="Run synthetic simulation experiments.")
+    parser.add_argument(
+        "--experiment",
+        choices=["uq_coverage", "presentation"],
+        default="uq_coverage",
+        help="Experiment workflow to run.",
+    )
+    parser.add_argument("--presentation-smoke", action="store_true", help="Run a small presentation-figure smoke test.")
+    parser.add_argument("--plot-only", action="store_true", help="Only redraw presentation PNGs from the saved summary JSON.")
+    parser.add_argument(
+        "--summary-path",
+        default=None,
+        help="Summary JSON to use with --plot-only; defaults to experiments/results/presentation_simulation_summary.json.",
+    )
+    parser.add_argument("--n-repeats", type=int, default=None, help="Override repeat count for presentation figures.")
+    parser.add_argument("--output-alpha", type=float, default=0.05, help="Interval alpha level for coverage metrics.")
+    args = parser.parse_args()
+
+    if args.plot_only:
+        plot_presentation_simulation_from_summary(args.summary_path)
+        return
+
+    if args.experiment == "presentation":
+        if args.presentation_smoke:
+            run_presentation_simulation(
+                n_repeats=2 if args.n_repeats is None else args.n_repeats,
+                T_list=[400, 800],
+                scale_list=[0.0, 1.0],
+                T_fixed=800,
+                alpha=args.output_alpha,
+            )
+        else:
+            run_presentation_simulation(
+                n_repeats=50 if args.n_repeats is None else args.n_repeats,
+                alpha=args.output_alpha,
+            )
+    else:
+        run_benchmark(["uq_coverage"])
+
+
 if __name__ == "__main__":
-    run_benchmark(["uq_coverage"])
+    main()

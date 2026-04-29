@@ -1,0 +1,1900 @@
+\documentclass{article}
+
+% if you need to pass options to natbib, use, e.g.:
+%     \PassOptionsToPackage{numbers, compress}{natbib}
+% before loading neurips_2024
+\PassOptionsToPackage{sort&compress,numbers}{natbib}
+
+% ready for submission
+\usepackage{neurips_2026}
+\usepackage{neurips-mystyle}
+\usepackage[belowskip=0pt]{caption}
+\setlength{\textfloatsep}{8pt}
+\setlength{\intextsep}{8pt}
+
+
+% to compile a preprint version, e.g., for submission to arXiv, add add the
+% [preprint] option:
+%     \usepackage[preprint]{neurips_2024}
+
+% to compile a camera-ready version, add the [final] option, e.g.:
+%     \usepackage[final]{neurips_2024}
+
+% to avoid loading the natbib package, add option nonatbib:
+%    \usepackage[nonatbib]{neurips_2024}
+
+\usepackage[utf8]{inputenc} % allow utf-8 input
+\usepackage[T1]{fontenc}    % use 8-bit T1 fonts
+% \usepackage{hyperref}       % hyperlinks
+\usepackage{url}            % simple URL typesetting
+\usepackage{booktabs}       % professional-quality tables
+\usepackage{amsfonts}       % blackboard math symbols
+\usepackage{nicefrac}       % compact symbols for 1/2, etc.
+% \usepackage{microtype}      % microtypography
+\usepackage{xcolor}         % colors
+\usepackage{comment}
+
+\allowdisplaybreaks
+
+\newcommand{\titletext}{Heterogeneous Judge-Aware Ranking with\\
+Reliability, Preference, and Confidence}
+
+\newcommand{\removelinebreaks}[1]{%
+      \def\\{\relax}#1}
+\def\titleRLB{\removelinebreaks{\titletext}}
+
+\title{\titletext}
+
+% The \author macro works with any number of authors. There are two commands
+% used to separate the names and addresses of multiple authors: \And and \AND.
+%
+% Using \And between authors leaves it to LaTeX to determine where to break the
+% lines. Using \AND forces a line break at that point. So, if LaTeX puts 3 of 4
+% authors names on the first line, and the last on the second line, try using
+% \AND instead of \And before the third author name.
+
+\newcommand{\footremember}[2]{%
+    \footnote{#2}
+    \newcounter{#1}
+    \setcounter{#1}{\value{footnote}}%
+}
+\newcommand{\footrecall}[1]{%
+    \footnotemark[\value{#1}]%
+}
+\newcommand{\IfThenElse}[3]{%
+  \State \algorithmicif\ #1\ \algorithmicthen\ #2\ \algorithmicelse\ #3%
+}
+\setcounter{footnote}{1}
+
+\author{Anonymous}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Pairwise ranking from multiple judges is increasingly central to modern large language model evaluation and preference modeling, yet most existing pipelines still aggregate judgments as if all judges were interchangeable. 
+We develop a \emph{Heterogeneous Judge-Aware (HJA) ranking} framework that separates three features that are often conflated in pooled ranking: judge reliability, structured preference heterogeneity, and statistical confidence. The model yields a consensus ranking shared across judges, while also allowing individual judges to differ both in how strongly they track that consensus and in the systematic ways they deviate from it.
+
+We establish interpretable identifiability conditions for this decomposition, propose a constrained maximum-likelihood estimator, and study estimation in an asymptotic regime tailored to repeated comparisons, where the number of judges may remain fixed or small while the number of comparisons per judge-item pair grows. This regime supports uncertainty quantification not only for the consensus ranking, but also for judge-specific rankings, reliability parameters, and latent disagreement structure.
+
+Empirically, we evaluate the method on synthetic experiments designed to test recovery of consensus, judge heterogeneity, and uncertainty under near-tie settings, and we include a real-data analysis on \blue{[TOADD]} to illustrate how judge-aware modeling can change substantive ranking conclusions relative to naive pooling. Together, the results provide a statistically grounded framework for ranking under heterogeneous comparative judgments.
+\end{abstract}
+
+\begin{bibunit}[unsrtnat]
+
+
+
+
+
+\section{Introduction}
+
+
+Comparative judgments have become a standard interface for both evaluation and alignment in modern language models. Pairwise preferences are now used not only to build leaderboards and benchmark systems, but also to collect supervision for post-training and preference optimization \citep{bradley1952rank,hunter2004mm,zheng2023mtbench,christiano2017preferences,ouyang2022instructgpt,rafailov2023dpo}. 
+In these settings, however, the relevant data no longer come from a single homogeneous evaluator. 
+They are increasingly produced by multiple annotators, multiple prompting conditions, or multiple large language models (LLMs), often on the same set of candidate outputs \citep{chen2013crowdbt,otani2016irt,zhao2025lmc,dhurandhar2024ranking}. 
+Treating those judges as interchangeable can be seriously misleading: recent evidence shows substantial variability across judge models, languages, and evaluation protocols, and such variability is especially consequential on subjective tasks and near-tie comparisons, where small differences in judging can induce large changes in the final ranking \citep{bavaresco2025llmjudges,fu2025multilingualjudge,guerdan2025indeterminacy,gao2025reevaluating}. As a result, moving from one judge to many does not merely add noise to a classical ranking problem; it changes the object of inference itself.
+
+
+
+The statistical tension is straightforward. 
+Leaderboards are unstable near ties, automatic judges exhibit prompt and language sensitivity, and forcing all judges into one pooled model risks making the final ranking biased rather than more reliable \citep{bavaresco2025llmjudges,fu2025multilingualjudge,guerdan2025indeterminacy,gao2025reevaluating,xu2026judgeaware}. 
+The same issue matters for alignment: preference-based training pipelines treat noisy comparative judgments as supervision, so misspecified judge aggregation can contaminate both evaluation and downstream optimization \citep{christiano2017preferences,ouyang2022instructgpt,rafailov2023dpo,xu2025drpo}.
+
+
+To address this gap, we develop a judge-aware ranking framework for repeated pairwise comparisons that separates the main components of comparative evaluation, as summarized in \Cref{fig:overview}. 
+The first is a consensus ranking that captures the ordering most strongly supported across judges. The second is judge-specific reliability, which measures how strongly each judge tracks that shared signal. 
+The third is a structured residual component that captures systematic departures from consensus, allowing judges to differ not only in how noisy or sharp they are, but also in the kinds of items they tend to favor. 
+The structural model of the framework yields an interpretable and estimable representation of heterogeneity. 
+This perspective also preserves uncertainty quantification for the inferential targets that matter in practice, including the consensus ranking, judge-specific rankings, reliability parameters, and latent disagreement patterns.
+
+The technical challenge is therefore not only to posit a flexible model of heterogeneous judging, but to make its decomposition statistically well-defined and inferentially usable. In this paper, we show that the proposed separation of consensus, judge reliability, and structured disagreement is identifiable under explicit normalization and concordance conditions (\Cref{prop:ident}). 
+We then formulate estimation as a constrained maximum-likelihood problem for repeated pairwise comparisons and develop an anchored proximal alternating procedure (\Cref{alg:mle}) with linear convergence guarantee (\Cref{thm:main_convergence}). Theoretically, we study an asymptotic regime tailored to modern evaluation settings, in which the number of judges may remain fixed or modest while information accumulates through repeated comparisons (\Cref{thm:asymptotics}). 
+This yields uncertainty quantification not only for the consensus ranking, but also for judge-specific rankings, reliability parameters, and the latent disagreement structure. Taken together, these results provide a statistically grounded alternative to naive pooling for LLM evaluation and preference modeling.
+
+\blue{[TOADD] Empirically, ...}
+
+% Existing approaches only partially address this multi-judge setting. The most common response is to pool all pairwise comparisons into a single ranking model, effectively treating judge-to-judge variation as noise around one latent ordering. More judge-aware methods relax this assumption by allowing annotators or judges to differ in reliability, calibration, or discrimination \citep{chen2013crowdbt,otani2016irt,xu2026judgeaware}, and recent uncertainty-aware evaluation work has emphasized that comparative judgments should not be collapsed into a single hard verdict \citep{fathullah2025generalised,wang2025judgmentdist}. Yet these corrections remain too coarse for modern LLM evaluation: judges may differ not only in how sharply they track a common ranking signal, but also in which answers, styles, languages, or task regimes they systematically favor. Without separating shared signal, judge reliability, and systematic disagreement, an observed ranking discrepancy has no clean interpretation, since it may reflect weak judging, genuine preference heterogeneity, or ordinary sampling uncertainty. The resulting challenge is therefore not merely better prediction of pairwise outcomes, but identification of a more meaningful inferential target.
+
+% The paper makes five concrete contributions:
+% \begin{enumerate}[leftmargin=1.5em]
+%   \item We formulate a judge-aware Bradley--Terry--Luce model that separates consensus ranking, judge reliability, and low-rank preference heterogeneity.
+%   \item We state centering, scaling, subspace-anchoring, and orthogonality constraints that make the decomposition interpretable and identifiable.
+%   \item We outline a constrained maximum-likelihood estimator and summarize the repeated-comparison asymptotic regime relevant when the number of judges is fixed or modest.
+%   \item We propose an experimental program spanning synthetic recovery, prompt sensitivity, panel judging, and near-tie stress tests, with baselines reused from existing LLM-as-a-judge protocols.
+%   \item We connect the statistical model to a practical local evaluation runner that supports caching, retries, parse-failure preservation, and both free-tier and paid provider configurations.
+% \end{enumerate}
+
+% Our goal is not to claim that a single latent model solves every LLM evaluation problem. The goal is narrower and more defensible: if rankings are built from heterogeneous judges, then the ranking model and the evaluation protocol should expose that heterogeneity instead of averaging it away.
+
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=\textwidth]{NeurIPS2026/img/overview.pdf}
+    \caption{
+    System-level overview of Heterogeneous Judge-Aware (HJA) ranking. 
+    Unlike a pooled multi-judge ranking pipeline, which collapses heterogeneous pairwise judgments into a single consensus score, HJA models a judge-specific latent score matrix through the decomposition
+    \(S=\gamma\mu^\top+UV^\top\). 
+    Here \(\mu\) represents the consensus ranking direction, \(\gamma\) measures judge-specific sensitivity to that consensus, and \(UV^\top\) captures structured preference heterogeneity across judges and items. 
+    The resulting procedure outputs consensus and judge-specific rankings together with uncertainty quantification for ranking-relevant contrasts, rather than reporting only point estimates.
+    }
+    \label{fig:overview}
+\end{figure}
+
+
+
+\section{Related Work}
+    
+\noindent\textbf{Pairwise ranking, annotator heterogeneity, and judge-aware aggregation.}
+Our starting point is the Bradley--Terry--Luce (BTL) model for ranking from pairwise comparisons \citep{bradley1952rank,hunter2004mm}. Beyond the homogeneous BTL setting, prior work in crowdsourcing and machine translation evaluation shows that once comparisons are collected from multiple annotators, aggregation must account for annotator-specific reliability, calibration, or sharpness \citep{chen2013crowdbt,otani2016irt}. 
+Our work builds on this line of research but targets a different source of heterogeneity: in LLM-based evaluation, disagreement across judges is often systematic and structured, not merely incidental noise around a single shared ranking. Accordingly, we study a decomposition that separates a consensus ranking direction from judge-specific sensitivity to that direction and from a low-rank residual component capturing structured disagreement.
+
+\noindent\textbf{LLM-as-a-judge and evaluator disagreement.}
+Pairwise LLM judging became a practical standard through benchmarks and platforms such as MT-Bench and Chatbot Arena \citep{zheng2023mtbench}, and early evidence suggested that strong LLM judges could sometimes serve as useful proxies for human evaluation \citep{chiang2023alternative}. 
+More recent work has weakened that optimistic view. Large-scale empirical studies report substantial variation across tasks and benchmarks \citep{bavaresco2025llmjudges}; multilingual evaluations show poor cross-language stability \citep{fu2025multilingualjudge}; and rating-indeterminacy analyses argue that collapsing multiple defensible judgments into a single forced label can itself introduce evaluation bias \citep{guerdan2025indeterminacy}. 
+Near-tie settings are especially fragile, since small prompt or decoding changes can induce large changes in pairwise outcomes and hence in final leaderboards \citep{gao2025reevaluating}. 
+These observations suggest that disagreement among judges should be modeled as part of the signal, rather than averaged away as if all judges were interchangeable.
+
+\noindent\textbf{Judge-aware ranking and uncertainty quantification.}
+The judge-aware ranking framework JA-BTL \citep{xu2026judgeaware} introduces judge-specific discrimination parameters for ranking LLM outputs without ground truth to quantify reliability. 
+Beyond reliability, a related line of work models heterogeneous preferences through structured score matrices learned from pairwise data, especially in collaborative ranking and preference completion \citep{lu2015individualized,park2015preference}. More broadly, low-rank structure has also been studied at the level of pairwise preference probabilities \citep{rajkumar2016can}, while alternative heterogeneous-population models include user-specific noise or latent user types \citep{jin2020rank,wu2015clustering}.
+Further, related work on comparative uncertainty models argues that evaluation pipelines should retain confidence information rather than reduce judgments to deterministic verdicts \citep{fathullah2025comparative,wang2025judgmentdist}.
+In contrast, we aim to connect these different perspectives to an identifiable, structured latent model for consensus ranking and judge-specific ranking, with reliability, heritability, and confidence.
+
+\noindent\textbf{Protocol design and alignment from comparative feedback.}
+Our paper is also related to work showing that the evaluation protocol itself shapes the inferential target. Ranking without ground truth via triplet comparisons \citep{dhurandhar2024ranking} and panel-based judging for subjective tasks \citep{zhao2025lmc} both move beyond single-pooled pairwise voting and highlight that multiple defensible judgments may coexist. On the alignment side, comparative judgments are a core supervision source in preference-based learning pipelines \citep{christiano2017preferences,ouyang2022instructgpt,rafailov2023dpo}, while recent robustness results emphasize the role of modeling assumptions on both judgments and policies \citep{xu2025drpo}. 
+% Our focus is narrower and more statistical: rather than proposing a new judging protocol or alignment objective, we study how repeated comparative judgments from heterogeneous judges can be aggregated into a consensus ranking with explicit uncertainty quantification and an interpretable representation of systematic disagreement.
+
+
+
+\section{Problem Setup}
+\todo{add some existing references to the following two subsections}
+\subsection{Pairwise judgments from multiple judges}
+
+We consider a repeated pairwise comparison setting with multiple judges. 
+Let $[N]=\{1,\ldots,N\}$ index the items and $[K]=\{1,\ldots,K\}$ index the judges. 
+For each judge $k\in[K]$ and unordered item pair $(i,j)$ with $1\le i<j\le N$, $n_{kij}$ denotes the number of repeated comparisons between items $i$ and $j$, and $Y_{kij}\in\{0,\ldots,n_{kij}\}$ denotes the number of times judge $k$ prefers item $i$ to item $j$. 
+Write
+\[
+\Omega := \{(k,i,j): 1\le k\le K,\ 1\le i<j\le N,\ n_{kij}>0\}
+\]
+for the set of observed judge-item-pair triples. This observation scheme is natural in LLM evaluation and preference modeling, where the same comparison may be repeated across prompts, random seeds, or judge models. Throughout the paper, statistical information grows through repeated judgments on observed triples, while the number of judges $K$ may remain fixed or modest.
+
+A pooled ranking model treats all judges as interchangeable and collapses their responses into a single latent score vector. In multi-judge evaluation, however, this is often too restrictive. Judges may differ not only in how strongly they align with an overall ranking signal, but also in systematic ways that cannot be explained by a common score plus independent noise. These considerations suggest that the target of inference should not be a single pooled ranking alone, but a decomposition that preserves a consensus ranking while allowing structured judge-specific departures from it.
+
+
+\subsection{Consensus ranking with reliability, preference heterogeneity, and confidence}
+
+A judge-aware ranking model should do more than output a single pooled ordering of the items. 
+In many evaluation settings, the substantive questions are not only which items rank highest on average, but also which judges track the shared ranking signal most strongly, where systematic preference disagreement remains, and how confident we should be in the ranking conclusions.
+
+Accordingly, we seek a representation that separates three statistical targets: 
+(i) consensus ranking, which summarizes the ordering most strongly supported across judges;
+(ii) judge-specific reliability, which measures how strongly each judge responds to the shared consensus direction;
+and (iii) structured preference heterogeneity, which allows judges to differ not only in sharpness or noise level, but also in systematic item-level preferences that cannot be explained by a scalar rescaling alone.
+
+In addition to recovering these latent components, the model should support confidence statements for the inferential outputs they induce. In particular, we would like to quantify uncertainty in the consensus ranking, in judge-specific comparisons, and in the estimated reliability and disagreement structure. This is especially important in near-tie regimes, where small perturbations in judgments can produce large changes in the final ordering. These considerations motivate a structured latent-score model that separates shared ranking signal from judge-specific alignment and residual disagreement. 
+The next section introduces such a decomposition.
+
+
+
+\section{Heterogeneous Judge-Aware Ranking Model}
+
+\subsection{Judge-specific latent scores under pairwise comparisons}
+We model each judge as having a latent score vector over the $N$ items, with pairwise judgments determined by differences in those scores. 
+Let $S\in\RR^{K\times N}$ denote the score matrix where the $k$th row $S_{k,:}$ represents the score vector for judge $k$.
+Conditional on $S$, the counts $\{Y_{kij}:(k,i,j)\in\Omega\}$ are assumed to be independent and follow Bradley--Terry--Luce (BTL) model \citep{bradley1952rank,luce1959individual}:
+\begin{equation}
+    Y_{kij}\sim \mathrm{Binomial}(n_{kij},p_{kij}), \qquad \mathrm{logit}(p_{kij})=S_{ki}-S_{kj}, \qquad (k,i,j)\in\Omega. \label{eq:binomial-model}
+\end{equation}
+Equivalently, \(p_{kij}={\exp(S_{ki})}/\{\exp(S_{ki})+\exp(S_{kj})\}.\)
+For each judge $k$, let $\cG_k=([N],\cE_k)$ denote the comparison graph with edge set
+\(
+\cE_k=\{\{i,j\}:(k,i,j)\in\Omega\}.
+\)
+For the main development, we assume that $\cG_k$ is connected for every $k$, as is standard in BTL estimation \citep{hunter2004mm}. 
+This condition implies that each judge-specific score vector is identifiable up to an additive constant from that judge's observed comparisons. Together with the row-centering constraint
+\begin{equation}
+    S \one_N = \zero_K,
+    \label{eq:S-id}
+\end{equation}
+this removes the usual additive invariance of the BTL model, so the collection $\{p_{kij}:(k,i,j)\in\Omega\}$ uniquely identifies $S$.
+We allow for disconnected individual comparison graphs in the partial sampling regime of \Cref{subsec:partial-sample}, provided that the pooled comparison structure together with the structural constraints of our model still identifies the latent score matrix.
+
+
+\subsection{Consensus-plus-heterogeneity decomposition}
+% A pooled BTL model forces all judges to share a single latent score vector and therefore cannot distinguish the common signal from systematic judge-specific departures. 
+To separate shared ranking information from structured disagreement across judges, we model the latent score matrix through a consensus-plus-heterogeneity decomposition:
+\begin{equation}
+S = \gamma \mu^\top + UV^\top,
+\label{eq:score-decomp}
+\end{equation}
+where $\mu \in \RR^N$ is the consensus item score vector, $\gamma \in \RR^K$ collects judge-specific consensus-sensitivity parameters, $U \in \RR^{K \times r}$ contains judge loadings on latent disagreement directions, and $V \in \RR^{N \times r}$ contains the corresponding item coordinates. Equivalently, one has
+\begin{equation}
+\mathrm{logit}(p_{kij})
+=
+\gamma_k(\mu_i-\mu_j)
++
+U_{k,:}(V_{i,:}-V_{j,:})^\top,\qquad (k,i,j)\in\Omega.
+\label{eq:judge-aware-link}
+\end{equation}
+
+This decomposition separates two distinct sources of variation across judges. The term
+$\gamma_k(\mu_i-\mu_j)$ captures how strongly judge $k$ responds to the common consensus signal, and therefore determines how sharply judge $k$ discriminates along the shared ranking direction $\mu$. 
+In the unlikely case where $\gamma_k<0$, the judge $k$ is viewed as \emph{malicious} \citep{chen2013crowdbt,jing2018hybrid}.
+The residual term $U_{k,:}(V_{i,:}-V_{j,:})^\top$ captures systematic departures from that consensus that cannot be explained by a scalar rescaling alone. As a result, the model distinguishes judges who differ mainly in sharpness from judges who exhibit structured preference heterogeneity across items.
+
+This distinction is particularly useful in LLM-as-a-judge settings. Some judges may be weakly aligned with the common ordering and therefore behave as comparatively noisy evaluators, while others may display systematic deviations tied to answer style, language, task domain, or other latent attributes. Under \eqref{eq:score-decomp}, the consensus vector $\mu$ represents the population-level ranking target, whereas $UV^\top$ encodes interpretable disagreement structure around that target.
+
+\begin{remark}[Consensus sensitivity versus global reliability]
+Under \eqref{eq:score-decomp}, the coefficient $\gamma_k$ modulates only judge $k$'s response to the consensus direction $\mu$, rather than scaling the entire latent score vector $S_{k,:}$. 
+A judge may be weakly aligned with the common ranking signal while still exhibiting strong and structured idiosyncratic preferences through the heterogeneous component $U_{k,:}V^\top$. In this sense, $\gamma$ is interpreted as a \emph{consensus-sensitivity} parameter rather than a global reliability parameter.
+
+If one instead wishes $\gamma$ to scale the full judge-specific score, one may set
+\(
+U=\diag(\gamma)\tilde U
+\)
+and write
+\[
+S
+=
+\gamma\mu^\top+\diag(\gamma)\tilde U V^\top
+=
+\diag(\gamma)\bigl(\one_K\mu^\top+\tilde U V^\top\bigr).
+\]
+Under this alternative parameterization, $\gamma$ plays the role of a global reliability parameter, since it scales both the consensus and heterogeneous components simultaneously.
+
+Our formulation does not impose strict positivity on the coefficients $\gamma_k$. This is useful in settings with noisy or partially adversarial judges: $\gamma_k=0$ means that judge $k$ does not respond to the consensus direction and contributes only through heterogeneous preferences, whereas $\gamma_k<0$ indicates systematic opposition to the consensus signal. By contrast, JA-BTL \citep{xu2026judgeaware} imposes a strict positivity restriction on the corresponding discrimination parameters.
+\end{remark}
+
+
+
+
+\subsection{Identification of latent components}
+\label{subsec:id}
+
+
+The decomposition in \eqref{eq:score-decomp} introduces interpretable latent components for consensus, judge reliability, and structured heterogeneity. However, this factorization is not unique: different parameter tuples may generate the same score matrix \(S\). 
+We therefore impose normalization conditions that make the decomposition statistically meaningful and prepare the ground for identification.
+\begin{condition}[Normalization]\label{cond:norm}
+    The parameters $(\gamma,\mu,U,V)$ satisfy:
+    \begin{enumerate}[label=(\roman*)]
+        \item\label{cond:center} {Centering:} $\one_N^\top \mu = 0$ and $V^\top \one_N = \zero_r$.
+        \item\label{cond:scale} {Scaling:} $\one_K^\top U = \zero_r^\top$ and $\one_K^\top \gamma = K$.
+        \item\label{cond:orth} {Orthogonality:} $\mu^\top V = \zero_r^\top$.
+        \item\label{cond:subspace} {Subspace anchoring:} $N^{-1}V^\top V = I_r$ and $K^{-1}U^\top U = D$ for some diagnal matrix $D$ with strictly decreasing positive diagonal entries.
+    \end{enumerate}
+\end{condition}
+
+\Cref{cond:norm}~\ref{cond:center}-\ref{cond:scale} fix a canonical representative of the decomposition in \eqref{eq:score-decomp}. 
+The centering constraints remove the additive indeterminacy inherited from the BTL model and align 
+the decomposition with the row-centering normalization \(S\one_N=\zero_K\). The scaling constraints 
+then calibrate the consensus component so that \(\mu\) represents the cross-judge consensus direction 
+and \(\gamma\) measures judge-specific alignment with that direction. Indeed, under \Cref{cond:norm}~\ref{cond:scale},
+\[
+\frac{1}{K}\one_K^\top S
+=
+\frac{1}{K}\one_K^\top \gamma \mu^\top
++
+\frac{1}{K}\one_K^\top U V^\top
+=
+\mu^\top,
+\qquad
+\gamma
+=
+\frac{S\mu}{\|\mu\|_2^2}
+=
+\frac{K}{\|\one_K^\top S\|_2^2}SS^\top \one_K.
+\]
+Thus \(\mu\) is identified as the row-average score direction, while \(\gamma\) records how strongly each judge loads on that consensus component.
+
+\Cref{cond:norm}~\ref{cond:orth}-\ref{cond:subspace} separate consensus from heterogeneity and anchor the residual factorization. 
+The constraint \(\mu^\top V=\zero_r^\top\) requires the heterogeneous item directions to be orthogonal to the consensus direction, while the subspace-anchoring condition removes rotational ambiguity up to column-wise sign changes. 
+Define the heterogeneous component of the latent score matrix:
+\begin{equation} \label{eq:S-residual}
+    \tilde{S} := S\mathcal{P}_{S^\top \one_K}^\perp, 
+\end{equation}
+where $\mathcal{P}_A^\perp$ denotes the projection matrix onto the orthogonal complement of $A$'s column space.
+In the degenerate case \(S^\top\one_K=\zero_N\), the induced model reduces to pure heterogeneity.
+
+Accordingly, for a fixed rank \(r\), we define
+\[
+\Theta_r
+=
+\left\{
+(\gamma,\mu,U,V):
+\mu\in\RR^N,\ \gamma\in\RR^K,\ U\in\RR^{K\times r},\ V\in\RR^{N\times r},
+\ \text{\Cref{cond:norm} holds}
+\right\}.
+\]
+Necessarily \(r\le R_{\max}:=\min\{K-1,N-2\}\), so that the centered and anchored factors can have 
+full column rank. While \Cref{cond:norm} specifies a normalized parameterization, it does not 
+by itself guarantee that an arbitrary centered score matrix \(S\) admits such a decomposition. To recover 
+\((\gamma,\mu,U,V)\) uniquely from \(S\), we therefore impose one additional regularity condition on the 
+heterogeneous component \(\tilde{S}\), stated in \Cref{cond:S-rank}.
+\begin{condition}[Rank]\label{cond:S-rank}
+    The heterogeneous score matrix $\tilde{S}$ has $r$ distinct positive singular values.
+\end{condition}
+
+The next proposition formalizes the identifiability of the model. 
+First, the observable comparison law identifies the latent score matrix \(S\), and then the normalized consensus-plus-heterogeneity decomposition can be recovered from \(S\) uniquely up to column-wise sign changes in \((U,V)\).
+
+\begin{proposition}[Identification] \label[proposition]{prop:ident}
+    Consider the probabilistic preference model \eqref{eq:binomial-model} subject to \eqref{eq:S-id}. Then,
+    %The following holds:
+    % is identifiable in the restricted parameter space $\Theta_r$. Specifically,
+    \begin{enumerate}
+        \item[(i)] (BTL identification)
+        The latent score matrix $S$ can be identified from the generative probability distribution of pairwise comparisons in \eqref{eq:binomial-model}.
+        
+        \item[(ii)] 
+        (Parameter identification and recovery) If \Cref{cond:S-rank} holds for $S$, then there exists $(\gamma, \mu,U,V)\in\Theta_r$ such that \eqref{eq:score-decomp} holds. Such existence is unique up to some sign changes in the columns of $U$ and $V$.
+    \end{enumerate}
+\end{proposition}
+
+
+\Cref{prop:ident} shows that the model parameters correspond to uniquely defined features of the data-generating mechanism, rather than to an arbitrary factorization of \(S\). The only residual ambiguity is the usual column-wise sign indeterminacy in \((U,V)\), which leaves both \(UV^\top\) and the induced pairwise probabilities unchanged. This identification result provides the foundation for the constrained estimation and uncertainty quantification procedures developed in the next section.
+
+
+
+
+
+\section{Estimation and Uncertainty Quantification}\label{sec:est-uq}
+\subsection{Constrained maximum likelihood estimation}\label{subsec:estimation}
+
+We first consider estimation for a fixed heterogeneity rank
+\(r \leq R_{\max}:=\min\{K-1,N-2\}\). Let
+\(\theta=(\gamma,\mu,U,V)\in\Theta_r\). For each observed triple
+\((k,i,j)\in\Omega\), define
+\(
+\eta_{kij}(\theta)=
+\gamma_k(\mu_i-\mu_j)
++
+U_{k,:}(V_{i,:}-V_{j,:})^\top .
+\)
+Dropping constants independent of \(\theta\), the negative log-likelihood is
+\begin{equation} \label{eq:ll}
+\mathcal{L}_n(\theta)
+:=
+\sum_{(k,i,j)\in\Omega}
+n_{kij}
+\Big[
+-\bar{Y}_{kij}\eta_{kij}(\theta)
++
+\log\big\{1+\exp(\eta_{kij}(\theta))\big\}
+\Big],
+\end{equation}
+where \(\bar{Y}_{kij}=Y_{kij}/n_{kij}\). We estimate the identifiable
+components of the HJA model by the constrained maximum-likelihood estimator (MLE)
+\begin{equation}
+\widehat{\theta}
+=
+(\widehat{\gamma},\widehat{\mu},\widehat{U},\widehat{V})
+\in
+\arg\min_{\theta\in\Theta_r}
+\mathcal{L}_n(\theta).
+\label{eq:mle}
+\end{equation}
+The constraint set \(\Theta_r\) is not a generic regularizer: it encodes the normalizations used in \Cref{subsec:id} to make the consensus direction, judge-specific consensus sensitivities, and low-rank disagreement component statistically identifiable. 
+Thus \(\widehat{\theta}\) estimates the canonical representative of the decomposition \(S=\gamma\mu^\top+UV^\top\), rather than an arbitrary factorization of the same score matrix.
+The resulting optimization problem is nonconvex because of the bilinear structure in \((U,V)\) and the nonlinear anchoring constraints. 
+The next subsection describes a proximal alternating algorithm that exploits the blockwise smoothness of \(\mathcal{L}_n\) while preserving the identifying geometry of \(\Theta_r\).
+
+
+\subsection{Anchored alternating optimization}\label{subsec:optimization}
+The constrained objective in \eqref{eq:mle} is nonconvex because of the bilinear factorization \(S=\gamma\mu^\top+UV^\top\) and the nonlinear anchoring constraints in \(\Theta_r\). 
+Nevertheless, when either the item block \((\mu,V)\) or the judge block \((\gamma,U)\) is fixed, the linear predictor \(\eta_{kij}(\theta)\) is affine in the remaining block. 
+Hence, the logistic loss is blockwise convex, and adding proximal terms makes the two subproblems strongly convex. This motivates the alternating updates in \Cref{alg:mle} over the judge and item blocks.
+
+A direct alternating scheme, however, does not preserve the nonlinear identification constraints, including \(\mu^\top V=0\), \(N^{-1}V^\top V=I_r\), and the diagonal normalization of \(K^{-1}U^\top U\). 
+\Cref{alg:mle} therefore combines proximal block updates with an \(S\)-preserving re-anchoring step.
+This step leaves the induced score matrix unchanged while replacing the current factorization by its canonical representative in \(\Theta_r\), thereby maintaining the geometry required by \Cref{prop:ident}. 
+Further implementation details, including initialization and the re-anchoring routine, are given in \Cref{app:est-main}.
+
+Unlike JA-BTL \citep{xu2026judgeaware}, we do not log-reparameterize the judge-specific coefficient \(\gamma\). 
+In our model, \(\gamma\) is an affine-anchored consensus-sensitivity vector recovered from the structured score matrix, not a strictly positive global discrimination parameter. 
+A log transform would impose unnecessary positivity and would not be compatible with the \(S\)-preserving re-anchoring map. The proximal terms make the block updates well posed and provide descent, while re-anchoring restores the canonical representative without changing the likelihood.
+
+
+
+\begin{algorithm}[t]
+    \caption{Proximal anchored alternating MLE for heterogeneous judge-aware (HJA) ranking}
+    \label{alg:mle}
+    \begin{algorithmic}[1]
+    \Require Data $\{(n_{kij},Y_{kij})\}_{(k,i,j)\in\Omega}$, rank \(r\), tolerance \(\varepsilon\), iterations \(T\), and parameters \(\{\tau^{(t)}\}_{t\geq 0}\).
+    \Ensure Estimated parameter $\hat\theta$, Fisher information matrix $\cI_n(\hat\theta)$, and a smooth target estimand \(q\).
+    \State $\theta^{(0)} \gets \textsc{Initialize}(\{(n_{kij},Y_{kij})\}_{(k,i,j)\in\Omega},r)$ based on \Cref{alg:initialize}.
+    \For{\(t=0,1,\ldots,T-1\)}
+        \State Set \(\tau \gets \tau^{(t)}\).
+        \State Compute \((\tilde{\gamma},\tilde{U})\) as the unique minimizer of
+        \(
+        \mathcal{L}_n(\gamma,\mu^{(t)},U,V^{(t)})
+        + \frac{\tau}{2}\|\gamma-\gamma^{(t)}\|_2^2
+        + \frac{\tau}{2}\|U-U^{(t)}\|_F^2
+        \)
+        subject to \(\one_K^\top \gamma=K\) and \(\one_K^\top U=\zero_r^\top\).
+        \State Compute \((\tilde{\mu},\tilde{V})\) as the unique minimizer of
+        \(
+        \mathcal{L}_n(\tilde{\gamma},\mu,\tilde{U},V)
+        + \frac{\tau}{2}\|\mu-\mu^{(t)}\|_2^2
+        + \frac{\tau}{2}\|V-V^{(t)}\|_F^2
+        \)
+        subject to \(\one_N^\top \mu=0\) and \(\one_N^\top V=\zero_r^\top\).
+        \State \(\theta^{(t+1)} \gets \textsc{ReAnchor}(\tilde{\gamma},\tilde{\mu},\tilde{U},\tilde{V})\) based on \Cref{alg:reanchor}.
+        
+        \If{
+        \(
+        {
+        |\mathcal{L}_n(\theta^{(t+1)})-\mathcal{L}_n(\theta^{(t)})|
+        }/{
+        [1+|\mathcal{L}_n(\theta^{(t)})|]
+        }
+        <\varepsilon
+        \)
+        }
+            \State \textbf{break}
+        \EndIf
+    \EndFor
+    \State \(\widehat{\theta}\gets \theta^{(t+1)}\) and $\cI_n(\hat\theta) \gets \textsc{EstimateFisherInfo}(\hat\theta)$ based on \Cref{alg:covariance}.
+    \State Compute \(\widehat q=q(\widehat\theta)\), \(\widehat{\mathrm{se}}(\widehat q)\), and the Wald interval \(\widehat q\pm z_{1-\alpha/2}\widehat{\mathrm{se}}(\widehat q)\) using \Cref{alg:uq}.
+    \end{algorithmic}
+\end{algorithm}
+
+
+
+To analyze \Cref{alg:mle} in the local nonconvex regime, we work in an identified chart around the target constrained MLE. 
+\Cref{asm:algo-chart} ensures that the re-anchoring map is locally well defined and nondegenerate; \Cref{asm:algo-local-min} imposes an isolated constrained local minimizer with positive curvature in this chart; and \Cref{asm:algo-init} places the initialization in its basin of attraction.
+Let \(\widehat{\theta}\) be defined by \eqref{eq:mle}, and let \(\{\theta^{(t)}\}_{t\geq 0}\) denote the anchored sequence generated by \Cref{alg:mle}. 
+Throughout the remainder of \Cref{sec:est-uq}, we fix the local column signs of \((U,V)\) by the anchoring convention and work in the corresponding local identified parameterization.
+
+\begin{theorem}[Locally linear convergence of \Cref{alg:mle}]
+\label{thm:main_convergence}    
+    Under \Cref{asm:algo-chart,asm:algo-local-min,asm:algo-init}, the iterates remain in the identified local chart, the likelihood values
+    \(\{\mathcal{L}_n(\theta^{(t)})\}_{t\geq 0}\) are nonincreasing, and
+    \(
+        \theta^{(t)} \to \widehat{\theta} .
+    \) 
+    Moreover, there exist constants \(C<\infty\), \(\rho\in(0,1)\), and \(t_0\geq 0\) such that, for all \(t\geq t_0\),
+    \(
+        \|\theta^{(t)}-\widehat{\theta}\|_2
+        +
+        \mathcal{L}_n(\theta^{(t)})-\mathcal{L}_n(\widehat{\theta})
+        \leq
+        C\rho^{\,t-t_0}.
+    \)
+\end{theorem}
+
+\Cref{thm:main_convergence} suggests that the re-anchored alternating updates of \Cref{alg:mle} are stable within the identified local chart: the objective decreases monotonically, the iterates converge to the intended constrained MLE, and the final local convergence is geometric. 
+
+
+
+
+
+\subsection{Uncertainty Quantification} \label{subsec:UQ}
+
+Point estimates alone are insufficient for judge-aware ranking: in near-tie regimes, small changes in the observed comparisons can alter the consensus ordering, judge-specific rankings, or estimated disagreement structure. 
+We therefore need uncertainty quantification for the score contrasts that determine ranking conclusions, not only estimates of the latent components themselves.
+To obtain such uncertainty statements, we study a fixed-rank repeated-comparison asymptotic regime. Unlike classical large-panel factor analysis, the number of judges \(K\) and items \(N\) may remain fixed, while information accumulates through repeated comparisons on the observed triples. 
+This regime is natural for LLM evaluation, where the same judge panel can be queried repeatedly across prompts, random seeds, or judging instances, even when adding new trusted judges is costly.
+
+
+We impose the following regularity conditions for statistical inference in this setting. 
+\Cref{asm:sampling} assumes stable asymptotic sampling fractions \(n_{kij}/n\to w_{kij}\); \Cref{asm:graph} requires the active comparison graph for each judge to be connected; \Cref{asm:score-space} imposes the nondegenerate true structured score model; and \Cref{asm:local-chart-regular} ensures that the structured parameterization is locally regular after fixing the column signs of \((U,V)\). 
+Together, graph connectivity identifies the row-centered score matrix from active pairwise differences, while local regularity ensures that this information passes to the consensus, reliability, and heterogeneity parameters.
+
+With the local sign convention fixed as in \Cref{subsec:optimization} and
+\(\Omega_w\) defined in \eqref{eq:active-graph}, define the Fisher information
+for the anchored true parameter \(\theta^*\in\Theta_r\) by
+\begin{align}
+    \cI(\theta^*)
+    =
+    \sum_{(k,i,j)\in\Omega_w}
+    w_{kij} p_{kij}^*(1-p_{kij}^*)
+    \nabla_{\theta}\eta_{kij}(\theta^*)
+    \nabla_{\theta}\eta_{kij}(\theta^*)^\top .\label{eq:fisher-aggregate}
+\end{align}
+Under these assumptions, the next theorem establishes consistency and asymptotic normality of the constrained MLE, together with the delta-method limit for smooth target functionals.
+
+\begin{theorem}[Fixed-rank asymptotics]
+\label{thm:asymptotics}
+    Under
+    \Cref{asm:sampling,asm:graph,asm:score-space,asm:local-chart-regular},
+    the constrained MLE satisfies
+    \(\widehat{\theta}\pto\theta^*\). Moreover,
+    \(\cI(\theta^*)\) is positive definite in the identified
+    local parameterization, and
+    \[
+        \sqrt{n}\big(\widehat{\theta}-\theta^*\big)
+        \dto
+        \mathcal{N}\!\left(
+            0,
+            \cI(\theta^*)^{-1}
+        \right).
+    \]
+    Consequently, for any smooth scalar target \(q:\Theta_r\to\mathbb{R}\),
+    \[
+        \sqrt{n}\{q(\widehat{\theta})-q(\theta^*)\}
+        \dto
+        \mathcal{N}\!\left(
+            0,
+            \nabla_{\theta}q(\theta^*)^\top
+            \cI(\theta^*)^{-1}
+            \nabla_{\theta}q(\theta^*)
+        \right).
+    \]
+\end{theorem}
+
+
+\Cref{thm:asymptotics} shows that repeated judgments can support inference on the structured components of the HJA model even when the judge panel itself does not grow.
+The Fisher information in \eqref{eq:fisher-aggregate} can be consistently estimated by the plug-in observed design estimator
+\begin{equation}
+\label{eq:fisher-plugin}
+    \mathcal{I}_{n}(\widehat{\theta})
+    =
+    \sum_{(k,i,j)\in\Omega}
+    \frac{n_{kij}}{n}
+    \widehat p_{kij}(1-\widehat p_{kij}
+    \nabla_{\theta}\eta_{kij}(\widehat{\theta})
+    \nabla_{\theta}\eta_{kij}(\widehat{\theta})^\top ,
+\end{equation}
+where
+\(
+    \widehat p_{kij}
+    =
+    \{1+\exp[-\eta_{kij}(\widehat{\theta})]\}^{-1}.
+\)
+Under the assumptions of \Cref{thm:asymptotics},
+\(
+    \mathcal{I}_{n}(\widehat{\theta})
+    \pto
+    \mathcal{I}(\theta^*).
+\)
+Thus Wald standard errors for smooth targets \(q(\theta)\) are given by
+\(
+    \widehat{\mathrm{se}}\{q(\widehat{\theta})\}
+    =
+    [
+    \frac{1}{n}
+    \nabla q(\widehat{\theta})^\top
+    \mathcal{I}_n(\widehat{\theta})^{-1}
+    \nabla q(\widehat{\theta})
+    ]^{1/2}.
+\)
+Typical choices of \(q\) include consensus contrasts \(\mu_i-\mu_j\), judge-specific contrasts \(S_{ki}-S_{kj}\), consensus-sensitivity parameters \(\gamma_k\), pairwise probabilities \(p_{kij}\), and smooth summaries of \(UV^\top\).
+These are the natural inferential objects for ranking: full rankings are discontinuous at ties, whereas pairwise score differences remain smooth and directly quantify ranking uncertainty.
+% In the context of LLM-as-a-judge evaluation, these targets correspond to leaderboard inference, per-judge calibration, and systematic disagreement analysis rather than a single pooled score vector.
+% When individual judge graphs are disconnected, \Cref{asm:graph} may fail even though the pooled comparison graph is connected. 
+% \Cref{subsec:partial-sample} discusses this partial-sampling regime. 
+% In that case, uncertainty quantification can still be justified under stronger local identification conditions on the structured score manifold, but these conditions are harder to verify and should be treated as a design-sensitive extension rather than the default theory.
+
+
+
+
+\subsection{Rank selection} \label{subsec:rank-selection}
+The algorithmic and theoretical properties above rely on a fixed model, and we now turn to model selection.
+The rank $r$ of the factorization $UV^\top$ serves as a structural hyperparameter that controls the model's capacity to capture heterogeneous preferences, thereby affecting model complexity.
+\Cref{app:rank-selection} offers three ways to select $r$, among which the BIC method has statistical guarantees:
+\begin{theorem}[Consistency of rank selection]
+\label{thm:bic_consistency}
+Under \Cref{asm:sampling,asm:graph,asm:score-space,asm:local-chart-regular} with fixed comparison graph, the rank selected by minimizing BIC defined in \eqref{eq:BIC} is statistically consistent, i.e.,
+\begin{equation*}
+    \lim_{n \to \infty} \mathbb{P} \left\{ \arg\min_{r \in \{0, \dots, R_{\max}\}} \mathrm{BIC}(r) = r^* \right\} = 1.
+\end{equation*}
+\end{theorem}
+
+
+
+\section{Experimental Program}
+
+The empirical goal is not merely to output another leaderboard. The experiments are designed to reveal when pooled judging fails, when judge-aware modeling helps, and how much ranking conclusions depend on prompt and protocol choices. We organize the evaluation into four blocks, summarized in Table~\ref{tab:starter-results}.
+
+{\renewcommand{\arraystretch}{1.05}
+\begin{table}[t]
+\centering
+\caption{Summary of extracted experimental table data for Judge-Aware Ranking for LLM Alignment with Reliability and Preference Heterogeneity.}
+\label{tab:starter-results}\tiny
+\begin{tabularx}{\textwidth}{lPPPP}
+\toprule
+Block & Goal & Data & Judges & Main Outputs \\
+\midrule
+Synthetic recovery & Recover latent consensus and judge reliability under controlled heterogeneity & Simulated pairwise comparisons from the proposed model & Simulated judges with varying $\gamma_k$ and low-rank disagreement & score error, reliability error, top-k coverage, calibration \\
+Prompt sensitivity & Measure ranking stability under prompt variation & MT-Bench-style question-answer pairs and local pairwise datasets & One judge model under multiple prompts & pairwise flip rate, Kendall correlation, top-k stability \\
+Panel judging & Estimate judge-specific heterogeneity across models/providers & Shared answer pairs on subjective and mixed-difficulty tasks & Multiple LLM judges, including free-tier and user-funded APIs & pooled ranking, judge disagreement, reliability estimates \\
+Near-tie benchmark & Stress-test ranking when candidate answers are almost indistinguishable & Curated near-tie answer pairs & Single and panel judges & tie rate, uncertainty, reordering probability \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+}
+
+\subsection{Synthetic recovery}
+
+The first block tests whether the model can recover the latent consensus ranking and judge-specific reliability under controlled heterogeneity. We simulate $\mu$, $\gamma$, $U$, and $V$, form $S = \gamma \mu^\top + UV^\top$, and draw repeated pairwise outcomes from the induced BTL probabilities. This block measures score error, reliability estimation error, top-$k$ coverage, and uncertainty calibration. It is the cleanest setting for separating a genuinely good estimator from one that only looks good when the data are pooled.
+
+\subsection{Prompt sensitivity}
+
+The second block asks how much the final ranking changes when the judging prompt changes but the candidate answers stay fixed. We reuse MT-Bench-style pairwise judging as the baseline protocol \citep{zheng2023mtbench} and compare it against a tie-aware judge-aware prompt that explicitly discourages verbosity bias and allows a tie verdict when answers are substantively indistinguishable. Every comparison is run in both original and swapped answer order. The resulting flip rate, Kendall rank correlation, and top-$k$ stability quantify how much ranking uncertainty is induced by prompt design alone.
+
+\subsection{Panel judging}
+
+The third block uses multiple judge models or providers on the same answer pairs. The purpose is to estimate pooled rankings and judge-specific disagreement simultaneously. This protocol is motivated by council-style judging for subjective tasks \citep{zhao2025lmc} and by evidence that different LLM judges behave differently across languages and task regimes \citep{bavaresco2025llmjudges,fu2025multilingualjudge}. The key comparison is between naive pooling and the proposed judge-aware decomposition.
+
+\subsection{Near-tie benchmark}
+
+The fourth block concentrates on answer pairs that are intentionally hard to separate. These near-tie examples are where automatic rankings become least trustworthy \citep{guerdan2025indeterminacy,gao2025reevaluating}. We construct them by pairing adjacent-quality answers, style-edited variants, and semantically close alternatives with multiple plausible judgments. The primary outputs are tie rate, reordering probability, and the sensitivity of top-$k$ membership to small protocol changes.
+
+% \subsection{Engineering system}
+
+% All experiments are designed to run through the local \texttt{ranking\_judge} package. The runner hashes complete requests for deterministic caching, logs raw requests and responses, retries transient API failures with bounded exponential backoff, and preserves parse failures as explicit records. This matters operationally, but it also matters methodologically: if evaluation artifacts are not reproducible, then ranking conclusions are not reproducible either. The detailed runbook, including prompt families, provider configurations, and expected artifacts, is deferred to Appendix~\ref{app:instructions}.
+
+
+
+\subsection{Robustness to self-evaluation bias and its detection}
+\label{subsec:self_evaluation_bias}
+
+A well-documented phenomenon in automated evaluation is self-evaluation bias (or self-preference), where an LLM judge systematically assigns higher scores to responses generated by itself or models from the same provider family. While this bias poses a significant threat to naive aggregation methods when a judging panel is monopolized by a single model family, its impact is fundamentally mitigated in a diverse, multi-judge setting.
+Therefore, we select a sufficiently large and diverse panel of judges so that the idiosyncratic self-preference of a few biased judges does not heavily skew the overall consensus ranking. Consequently, the shared consensus $\mu$ remains robust, naturally diluting minority biases without external or human-annotated ground-truth rankings.
+
+On the other hand, our formulation can also absorb a judge's systematic self-preference into the low-rank heterogeneity term $UV^\top$. The heatmap of $UV^\top$ should show bright ``hotspots'' exactly where a judge prefers the output of its own or its family members. This mechanism ensures that $\mu$ retains a high-fidelity representation of consensus quality without the need to completely discard a biased judge.
+
+\blue{
+% A related concern is the self-preference bias: an LLM judge may systematically favor responses generated by itself, by models from the same family, or by models from the same provider.
+[TODO] need to demonstrate whether self-preference bias exists or not, and if the bias can be captured and removed through our modeling.
+
+Will include them in the experiment section.
+
+%The HJA model should automatically cluster the self-preference. The heatmap should show bright "hotspots" exactly where a judge evaluates its own output. For instance, the cell corresponding to $U_{\text{Claude}} V_{\text{Claude-Response}}^\top$ should be distinctly positive.
+}
+
+% \section{Limitations}
+
+% This manuscript is a paper-complete NeurIPS draft, not yet a final empirical submission. The theoretical model and experimental program are specified, but the strongest quantitative claims still depend on completing large-scale judge runs and curating the near-tie benchmark carefully. Free-tier APIs are useful for local iteration, but they may introduce availability, latency, or model-version drift that should not be confused with substantive judge heterogeneity. More broadly, the proposed decomposition is intentionally structured; if real judge behavior exhibits context-dependent or cyclic preferences beyond the low-rank model, then richer preference representations may be needed.
+
+
+\section{Conclusion}
+
+We presented a judge-aware ranking framework for LLM alignment evaluation that separates consensus ranking from judge reliability and structured disagreement. The model is motivated by a practical failure mode in current LLM-as-a-judge pipelines: rankings are often reported as if prompts, languages, and judges were interchangeable when they are not. The accompanying experimental program targets exactly those failure modes through synthetic recovery, prompt sensitivity, panel judging, and near-tie stress tests. Combined with a local evaluation runner that makes the protocol reproducible, the resulting paper provides both a statistical model and a concrete path toward more defensible leaderboard claims.
+
+
+
+
+% \bibliographystyle{unsrtnat}
+% \bibliography{references}
+\putbib[references]
+\end{bibunit}
+
+\clearpage
+
+\appendix
+\counterwithin{theorem}{section}
+% \counterwithin{lemma}{section}
+% \counterwithin{proposition}{section}
+\counterwithin{equation}{section}
+
+
+\renewcommand{\thesection}{\Alph{section}}
+\setcounter{table}{0}
+\renewcommand{\thetable}{\thesection\arabic{table}}
+\setcounter{figure}{0} 
+\renewcommand\thefigure{\thesection\arabic{figure}}
+\setcounter{algorithm}{0}
+\renewcommand{\thealgorithm}{\thesection.\arabic{algorithm}}
+\renewcommand{\theHalgorithm}{\thesection.\arabic{algorithm}}
+
+
+\begin{bibunit}[unsrtnat]
+
+\begin{center}
+\Large
+{\bf Appendix}
+\end{center}
+
+This serves as an appendix to the main paper.
+Below, we provide an outline for the appendix along with a summary of the notation used in the main paper and the appendix.
+
+\paragraph{Organization.}
+The content of the appendix is organized as follows.
+
+\begin{table}[!ht]
+\centering \small
+\begin{tabularx}{0.95\textwidth}{l l D}
+    \toprule    
+    \multicolumn{2}{c}{\textbf{Appendix}} & \textbf{Content} \\
+    \midrule
+    \Cref{app:ident} & \ref{app:ident:prop:ident} & Proof of \Cref{prop:ident} on model identification.\\
+    \midrule \addlinespace[0.5ex]     
+    \multirow{2}{*}{\Cref{app:est}} & \ref{app:est-main}& Algorithms and implementation details. \\
+    & \ref{app:est:subsec:conv} & Proof of \Cref{thm:main_convergence} on convergence analysis. \\    
+    \midrule \addlinespace[0.5ex]
+    \multirow{5}{*}{\Cref{app:stat}} & \ref{subsec:asm} & Regularity assumptions. \\
+    & \ref{app:mle-proof} & Proof of \Cref{thm:asymptotics} (consistency and asymptotic normality). \\
+    & \ref{app:lemmas} & Auxiliary lemmas used in \Cref{app:mle-proof}.\\
+    & \ref{app:graph_fisher_nondegenerate} & Graph-induced nondegeneracy of the Fisher information. \\
+    & \ref{subsec:partial-sample} & Partial-sampling (pooled-graph treatment) regime. \\\midrule \addlinespace[0.5ex]
+    \multirow{2}{*}{\Cref{app:rank-selection}} & \ref{app:subsec:rank-selection} & Rank selection criteria. \\
+    &  \ref{app:subsec:bic_proof} & Proof of \Cref{thm:bic_consistency} on hyperparameter selection consistency. \\
+    \bottomrule
+\end{tabularx}
+\end{table}
+% \vspace*{-1.7\baselineskip}
+\addcontentsline{toc}{part}{\appendixname}
+
+\paragraph{Notation.}
+An overview of some general notation used in the main paper and the appendix is as follows.
+
+\red{please add notations used throughout below:}
+
+% For a vector $X\in \RR^d$, $X_{\cS}\in \RR^{|\cS|}$ denotes a sub-vector of $X$ indexed by $\cS\subseteq[d]$, and $X_{-j} := X_{\{1,\ldots,j-1,j+1,\ldots,d\}}$. 
+In \(\RR^d\), the $j$-th standard basis vector is denoted by $e_j$ and the zero (or all-one) vector is denoted by \(\zero_d\) (or \(\one_d\)) or simply \(\zero\) (or \(\one\)) if the dimension is clear from the context.
+The cardinality of a set $\cS$ is denoted by $|\cS|$. The indicator function is denoted by $\ind_{\{\cdot\}}$.
+
+
+% For a tuple of random vectors $O =(X,Y)$, the expectation and probability over the joint distribution $\PP$ are denoted by $\EE(\cdot)$ and $\PP(\cdot)$, respectively. 
+% For (potentially random) measurable functions $f$, we denote expectations with respect to the data-generating distribution of $O$ alone by $\PP f(O) = \int f \rd\PP$, while $\EE [f(O)]$ marginalizes out all randomness from both $O$ and any nuisance functions $f$ is dependent on. The empirical expectation over $n$ samples is denoted by $\PP_n f(O) = \frac{1}{n}\sum_{i=1}^nf(O_i)$. The $L_2$ norm of a function $f$ is denoted by $\|f\|_{L_2}$.
+
+
+% For a statistical estimand $\phi$, we write $\phi(\PP)$ to emphasize its dependence on the underlying distribution $\PP$. The population and empirical variances (covariances) are denoted by $\VV$ and $\VV_n$ ($\CC$ and $\CC_n$).
+% The $d$-dimensional multivariate normal distribution with mean $\mu$ and covariance $\Sigma$ is denoted by $\cN_d(\mu, \Sigma)$.
+% For matrices \( A_1, A_2, \ldots, A_k \), the notation \( \diag(A_1, A_2, \ldots, A_k) \) represents a block diagonal matrix that combines all of the matrices.
+
+We use ``$o$'' and ``$\cO$'' to denote the little-o and big-O notations; ``$\op$'' and ``$\Op$'' are their probabilistic counterparts. For sequences $\{a_n\}$ and $\{b_n\}$, we write $a_n\lesssim b_n$ if $a_n=\cO(b_n)$; and $a_n\asymp b_n$ if $a_n=\cO(b_n)$ and $b_n=\cO(a_n)$. 
+Convergence almost surely, in probability, and in distribution is denoted by ``$\xrightarrow{\mathrm{a.s.}}$'', ``$\pto$'', and ``$\dto$'', respectively. When ``positivity'' property is imposed or stated on a matrix, it means positive definiteness. We use $\mathrm{KL}(p\,\|\,q)$ to denote the Kullback–Leibler (KL) divergence between two distributions $p$ and $q$.
+
+
+
+\clearpage
+\section{Identification}\label{app:ident}
+\subsection[Proof of Proposition 1]{Proof of \Cref{prop:ident}}\label{app:ident:prop:ident}
+
+\begin{proof}[Proof of \Cref{prop:ident}]
+    The proof consists of three parts. First for (i), given any set of pairwise probabilities, $S$ is uniquely identified if each of its row is restricted to have zero sum (i.e., Eq. \eqref{eq:S-id}). The second part proves that the mapping induced by \eqref{eq:score-decomp} from $\Theta_r$ to the space of $S$ is injective. Finally, Part (iii) imposes \eqref{eq:S-id} on the space of $S$, which makes such mapping bijective (one-to-one). Part (iii), combined with Part (ii), establishes the unique existence, which is identification.
+    \paragraph{Part (i): Identification of BTL score matrix.}
+    For each fixed judge $k$, the pairwise probabilities determine all score differences $S_{ki}-S_{kj}$ through the inverse logit \eqref{eq:binomial-model}. Hence, if $\tilde{S}$ is another matrix generating the same pairwise probabilities, then $$\tilde{S}_{ki}-\tilde{S}_{kj}=S_{ki}-S_{kj} \qquad \text{for all } i,j.$$
+    Therefore, for each $k$, the vector $\tilde{S}_{k,:}-S_{k,:}$ is constant across items, i.e., there exists $c_k\in\RR$ such that
+    $$\tilde{S}_{k,:}=S_{k,:}+c_k\one_N^\top.$$
+    Right-multiplying both sides by $\one_N$ yields 
+    $$\tilde{S}_{k,:}\one_N=S_{k,:}\one_N+c_k\one_N^\top\one_N=S_{k,:}\one_N+Nc_k.$$
+    But it is required that $S\one_N=\zero$, with the same applying to $\tilde{S}$, and therefore $c_k=0$ for all $k\in\{1,\ldots,K\}$, i.e., $S=\tilde{S}$.
+
+    \paragraph{Part (ii): Identification of latent components.}
+    Below, we prove that if $S=\gamma\mu^\top+UV^\top$ with $(\gamma,\mu,U,V)\in\Theta_r$, the parameters are uniquely identified subject to some sign changes to be specified later.
+
+    Multiplying both sides of \eqref{eq:score-decomp} with $\frac{1}{K}\one_K^\top$ yields 
+    \begin{equation} \label{eq:mu}
+    \frac{1}{K}\one_K^{\top}S = \frac{1}{K}\one_K^{\top}\gamma\mu^{\top} + \frac{1}{K}\one_K^{\top}UV^{\top} = \mu^{\top},
+    \end{equation}
+    so $\mu$ is immediately identified by the row average of $S$.
+    
+    To further separate the consensus item direction from the heterogeneity item subspace, by \Cref{cond:norm}~\ref{cond:orth},
+    \begin{equation} \label{eq:gamma}
+        S\mu = \gamma\|\mu\|^2 + U(V^{\top}\mu) = \gamma\|\mu\|^2 \Longrightarrow \gamma = \frac{S\mu}{\|\mu\|^2},
+    \end{equation}
+    and thus $\gamma$ is identified.
+
+    We proceed to identify $U$ and $V$ from $\tilde{S}:=S-\gamma\mu^\top=UV^\top$. Write $U=[u_1,\dots,u_r]$ and $V=[v_1,\dots,v_r]$. By \Cref{cond:norm}~\ref{cond:subspace}, the vectors $v_1,\dots,v_r$ are orthonormal after normalization by $\sqrt{N}$, and the columns of $U$ are mutually orthogonal with $\|u_j\|_2^2=Kd_j$. Together with the orthogonality condition (\Cref{cond:norm}~\ref{cond:orth}), this yields the orthogonal decomposition
+    $$\tilde{S}=\sum_{j=1}^r u_jv_j^\top,$$
+    where the left vectors $\gamma,u_1,\dots,u_r$ are mutually orthogonal and the right vectors $\mu,v_1,\dots,v_r$ are mutually orthogonal.
+    Therefore, after normalization, this is a singular value decomposition of $S$. Its nonzero singular values are
+    $$
+    \sigma_j=\|u_j\|_2\|v_j\|_2=\sqrt{KN\,d_j}, \qquad j=1,\dots,r.
+    $$
+    The strict inequalities $d_1>\cdots>d_r>0$ imply that $\sigma_1,\dots,\sigma_r$ are pairwise distinct and therefore simple.
+
+    Now let $\tilde{S}=\tilde{U}\tilde{V}^\top$ be another representation satisfying the same conditions. The same argument shows that this representation also produces an SVD of $\tilde{S}$ with the same simple nonzero singular values. By the uniqueness of singular vectors associated with simple singular values, there exist signs $\varepsilon_1,\dots,\varepsilon_r\in\{\pm1\}$ such that
+    $$ 
+        \tilde{u}_j=\varepsilon_j u_j,\qquad
+        \tilde{v}_j=\varepsilon_j v_j,\quad j=1,\dots,r.
+    $$
+    For each $j$, the pair $(\tilde{u}_j,\tilde{v}_j)$ may be replaced by $(-\tilde{u}_j,-\tilde{v}_j)$ without changing the product $\tilde{u}_j\tilde{v}_j^\top$. And therefore $U$ and $V$ are identified up to the sign changes in their corresponding columns.
+    
+    \begin{remark}[Sign of factors and loadings] \label{rem:sign-id}
+        In subsequent analysis where such sign ambiguities also need ruling out, we may require the first non-zero elements of each column of $U$ to be positive, so that the signs of $U$ and $V$ are anchored and fixed.
+    \end{remark}
+    
+    \paragraph{Part (iii): Existence of parameters recovered from $S$.} 
+    We are left to show that given any matrix $S\in\RR^{K\times N}$ satisfying $S\one_N=\zero$ and \Cref{cond:S-rank}, these parameters can indeed be constructed. Let $\mu=\frac{1}{K}S^\top\one_K$, and we have $\one_N^\top\mu=0$.
+    Then, $$\gamma:=\frac{1}{\|\mu\|^2}S\mu=\frac{K}{\|\one_K^\top S\|^2}SS^\top\one_K$$ satisfies $\one_K^\top \gamma = K$, which is the second part of \Cref{cond:norm}~\ref{cond:scale}.
+
+    After recovering the concensus part, the remaining $\tilde{S}=S-\alpha SS^\top\one_K \one_K^\top S$, where $\alpha=1/\|\one_K^TS\|^2$. Hence, \(\tilde{S}=S\mathcal{P}_{S^\top \one_K}^\perp\) where $\mathcal{P}^\perp$ is the projection matrix onto the orthogonal complement.
+    Therefore, $\one_K^{\top}\tilde{S} = \one_K^\top S\mathcal{P}_{S^\top \one_K}^\perp=\zero^\top$ automatically holds. 
+    Take the SVD of $\tilde{S}$ to get $\tilde{S}=P\Sigma R^\top$. Let $V=\sqrt{N}R$ and $U= \frac{1}{\sqrt{N}} P\Sigma$, and \Cref{cond:norm}~\ref{cond:subspace} is satisfied. The rank $r$ is also determined to be $\rank(\tilde{S})$.
+
+    To verify the first part of Condition \Cref{cond:norm}~\ref{cond:scale}, we left-multiply $\one_K^\top$ to the equation $\tilde{S}=UV^\top$ and get $(\one_K^\top U)V^\top=\one_K^{\top}\tilde{S}=\zero^\top$, i.e., $V (\one_K^\top U)^\top=\zero$. But $V\in\RR^{N\times r}$ is constructed to have full column rank, and consequently \Cref{cond:norm}~\ref{cond:scale} must hold.
+
+    Finally, we study $V^\top\mu$. Note that by \eqref{eq:S-residual}, $\tilde{S}\mu=\frac{1}{K}S\mathcal{P}_{S^\top \one_K}^\perp\one_K^\top S=\zero$, and hence $UV^\top\mu=\zero$. But $U$ is also constructed to have full column rank, and $V^\top\mu$ must be zero. Taking the transpose yields \Cref{cond:norm}~\ref{cond:orth}.
+    A similar argument verifies $V^\top\one_N=\zero$.
+
+    Parts (ii) and (iii) jointly corroborate \Cref{prop:ident}(ii).
+\end{proof}
+
+
+
+
+
+\clearpage
+\section{Estimation}\label{app:est}
+
+
+
+\subsection{Algorithm} \label{app:est-main}
+
+This section collects the computational steps for the constrained maximum-likelihood estimator \Cref{alg:mle} introduced in \Cref{subsec:estimation}. 
+% Starting from aggregated repeated-comparison counts $\{(n_{kij},Y_{kij})\}_{(k,i,j)\in\Omega}$, we first construct an initialization using pooled and judge-specific centered BTL fits. We then apply a projected alternating scheme that updates the judge-side parameters $(\gamma,U)$ and item-side parameters $(\mu,V)$ in turn. Because the factorization is nonconvex and only identifiable under the constraints defining $\Theta_r$, each iteration is followed by a re-anchoring step that restores centering, orthogonality, and normalization. The final routine estimates covariance in a locally identified chart and reports uncertainty for smooth target functionals.
+
+
+
+\subsubsection{Initialization}
+\begin{algorithm}[!ht]
+    \caption{\textsc{Initialize}: construct $(\gamma^{(0)},\mu^{(0)},U^{(0)},V^{(0)})$}
+    \label{alg:initialize}
+    \begin{algorithmic}[1]
+    \Require Aggregated counts $\{(n_{kij},Y_{kij})\}_{(k,i,j)\in\Omega}$, target rank $r$, feasibility margin $\delta_\gamma>0$
+    \Ensure Initial value $\theta^{(0)}=(\gamma^{(0)},\mu^{(0)},U^{(0)},V^{(0)}) \in \Theta_r$
+    
+    \State Fit a pooled centered BTL model to obtain $\mu^{(0)}$.
+    \State Re-center $\mu^{(0)} \gets \mu^{(0)} - \frac{1}{N}(\one_N^\top \mu^{(0)})\one_N$.
+    \State Set $\gamma^{(0)} \gets \one_K$.
+    
+    \For{$k=1,\ldots,K$}
+        \State Fit a centered judgewise BTL model using judge $k$'s comparisons to obtain $\tilde S^{(0)}_{k,:}$.
+    \EndFor
+    
+    \State Form the initial residual matrix $R^{(0)} \gets \tilde S^{(0)} - \gamma^{(0)}(\mu^{(0)})^\top$.
+    \State Judge-center the residual:
+    \(
+    R_c^{(0)} \gets R^{(0)} - \frac{1}{K}\one_K \one_K^\top R^{(0)}.
+    \)
+    
+    \State Compute the rank-$r$ truncated singular value decomposition $R_c^{(0)} \approx P_r \Sigma_r Q_r^\top$.
+    \State Set $U^{(0)} \gets P_r \Sigma_r^{1/2}$ and $V^{(0)} \gets Q_r \Sigma_r^{1/2}$.
+    
+    \State Compute $(\gamma^{(0)},\mu^{(0)},U^{(0)},V^{(0)}) \gets \textsc{ReAnchor}( \gamma^{(0)},\mu^{(0)},U^{(0)},V^{(0)} )$ based on \Cref{alg:reanchor}.
+
+    \State $\gamma_k^{(0)} \gets \max\{\gamma_k^{(0)},\delta_\gamma\}$.
+    
+    \State \Return $\theta^{(0)}=(\gamma^{(0)},\mu^{(0)},U^{(0)},V^{(0)})$.
+    \end{algorithmic}
+\end{algorithm}
+
+
+
+
+% \clearpage
+
+\subsubsection{Re-anchor and enforce identifiability}
+
+\begin{algorithm}[!ht]
+    \caption{\textsc{ReAnchor}: canonical re-anchoring with feasibility check}
+    \label{alg:reanchor}
+    \begin{algorithmic}[1]
+    \Require Tentative $(\tilde{\gamma},\tilde{\mu},\tilde{U},\tilde{V})$ from the two block updates, feasibility margin $\delta_\gamma>0$, tolerance $\delta_\mu>0$, spectral tolerance $\delta_\sigma>0$.
+    \Ensure Either a feasible anchored point $(\gamma^+,\mu^+,U^+,V^+)\in\Theta_r$ or \textsc{Fail}.
+
+    \State Set $\mu^+ \gets \tilde{\mu}$.
+    \If{$\|\mu^+\|_2 < \delta_\mu$}
+        \State \Return \textsc{Fail} \Comment{Avoid instability incurred on updating $V$}
+    \EndIf
+
+    \State Compute $a \gets \tilde{V}^\top \mu^+ / \|\mu^+\|_2^2$.
+    \State Set $\bar V \gets \tilde V - \mu^+ a^\top$ and $\gamma^{+} \gets \tilde\gamma + \tilde U a$.
+
+    \State Form $\bar H \gets \tilde U \bar V^\top$.
+    \State Compute the thin singular value decomposition $\bar H = P\Sigma Q^\top$, with diagonal entries of $\Sigma$ arranged in decreasing order.
+    \If{$\sigma_r(\Sigma) < \delta_\sigma$}
+        \State \Return \textsc{Fail} \Comment{Avoid ill-conditioned matrices caused by a large leap}
+    \EndIf
+
+    \State Set $U^+ \gets P\Sigma/\sqrt{N}$, and $V^+ \gets \sqrt{N}\,Q$.
+    Flip the corresponding columns of $(U^+,V^+)$ so that the first nonzero entry of each column of $U^+$ is positive.
+    \State \Return $(\gamma^+,\mu^+,U^+,V^+)$
+    \end{algorithmic}
+\end{algorithm}
+The re-anchoring step restores the nonlinear identification constraints without changing the implied score matrix $\tilde S = \tilde\gamma \tilde\mu^\top + \tilde U \tilde V^\top$. Concretely, \textsc{ReAnchor} removes the component of $\tilde V$ along $\tilde\mu$, compensates for this change through the update $\gamma^{\mathrm{+}} = \tilde\gamma + \tilde U a$, and then refactorizes the heterogeneity term by a normalized singular value decomposition. If the candidate loading violatesthe local nondegeneracy conditions, the routine returns \textsc{Fail}, and the main algorithm increases the proximal parameter before recomputing the block updates.
+
+In exact arithmetic, the post-anchor candidate automatically satisfies
+$\one_K^\top \gamma^{\mathrm{+}} = K$ because the judge block enforces
+$\one_K^\top \tilde\gamma = K$ and $\one_K^\top \tilde U = \zero_r^\top$.
+%Accordingly, the feasibility backtracking step only checks positivity and local nondegeneracy conditions. Under a strict interior-chart condition, these conditions are preserved for all sufficiently large proximal parameters.
+
+% \clearpage
+\subsubsection{Confidence intervals for target functionals}
+
+\begin{algorithm}[!ht]
+\caption{\textsc{EstimateFisherInfo}: plug-in Fisher information}
+\label{alg:covariance}
+\begin{algorithmic}[1]
+\Require Final estimator \(\widehat\theta=(\widehat\gamma,\widehat\mu,\widehat U,\widehat V)\), data \(\{(n_{kij},Y_{kij})\}_{(k,i,j)\in\Omega}\).
+\Ensure Plug-in Fisher information matrix \(\mathcal I_n(\widehat\theta)\).
+\State Use the local identified parameterization fixed in \Cref{subsec:optimization}; all gradients below are taken in this parameterization.
+\For{each \((k,i,j)\in\Omega\)}
+    \State Compute
+    \(
+        \widehat\eta_{kij}
+        =
+        \widehat\gamma_k(\widehat\mu_i-\widehat\mu_j)
+        +
+        \widehat U_{k,:}(\widehat V_{i,:}-\widehat V_{j,:})^\top .
+    \)
+    \State Set
+    \(
+        \widehat p_{kij}
+        =
+        \{1+\exp(-\widehat\eta_{kij})\}^{-1}.
+    \)
+    \State Compute the local gradient
+    \(
+        \widehat g_{kij}
+        =
+        \nabla_\theta \eta_{kij}(\widehat\theta).
+    \)
+\EndFor
+\State Set
+\(
+    \mathcal I_n(\widehat\theta)
+    \gets
+    \sum_{(k,i,j)\in\Omega}
+    \frac{n_{kij}}{n}
+    \widehat p_{kij}(1-\widehat p_{kij})
+    \widehat g_{kij}\widehat g_{kij}^{\top}.
+\)
+\State \Return \(\mathcal I_n(\widehat\theta)\).
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[!ht]
+\caption{\textsc{UncertaintyQuantification}: delta-method confidence intervals}
+\label{alg:uq}
+\begin{algorithmic}[1]
+\Require Final estimator \(\widehat\theta\), plug-in information matrix \(\mathcal I_n(\widehat\theta)\), target functionals \(\mathcal Q\), confidence level \(1-\alpha\).
+\Ensure Wald confidence intervals for \(\{q(\theta):q\in\mathcal Q\}\).
+\State Use the local identified parameterization fixed in \Cref{subsec:optimization}.
+\State Set
+\(
+    \widehat\Sigma_{\theta}
+    \gets
+    \frac{1}{n}\mathcal I_n(\widehat\theta)^{-1}.
+\)
+\For{each smooth scalar target \(q\in\mathcal Q\)}
+    \State Compute \(\widehat q=q(\widehat\theta)\).
+    \State Compute the local gradient
+    \(
+        \widehat a_q
+        =
+        \nabla_\theta q(\widehat\theta).
+    \)
+    \State Compute
+    \(
+        \widehat{\mathrm{se}}(\widehat q)
+        =
+        \left(
+        \widehat a_q^\top
+        \widehat\Sigma_{\theta}
+        \widehat a_q
+        \right)^{1/2}.
+    \)
+    \State Report
+    \(
+        \widehat q
+        \pm
+        z_{1-\alpha/2}\widehat{\mathrm{se}}(\widehat q).
+    \)
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+
+
+\subsection{Convergence analysis}\label{app:est:subsec:conv}
+
+\begin{assumption}[Local algorithmic chart]
+\label{asm:algo-chart}
+There exists a compact set $\Theta_{r,0}\subset \Theta_r$ such that:
+(i) $\theta^\ast$ lies in the relative interior of $\Theta_{r,0}$ after fixing the local anchor signs of the columns of $U$ and $V$;
+(ii) for every $\theta=(\gamma,\mu,U,V)\in\Theta_{r,0}$, one has $\|\mu\|_2\ge \delta_\mu$, and the nonzero singular values of $UV^\top$ are separated from each other and from zero by at least $\delta_\sigma$;
+(iii) the re-anchoring map is well-defined and maps $\Theta_{r,0}$ into itself.
+\end{assumption}
+
+\begin{assumption}[Local isolated minimizer]
+\label{asm:algo-local-min}
+For the empirical criterion $\cL_n$, there exists a unique local minimizer $\hat\theta_n\in\Theta_{r,0}$, after fixing the anchor signs, and $\nabla_\xi^2 \cL_n(\hat\theta_n)$ is positive definite in the local free-coordinate chart $\xi$.
+\end{assumption}
+
+\begin{assumption}[Initialization in basin]
+\label{asm:algo-init}
+The initialized iterate $\theta^{(0)}$ lies in the basin of attraction of $\hat\theta_n$ within $\Theta_{r,0}$.
+\end{assumption}
+
+
+\begin{proof}[Proof of \Cref{thm:main_convergence}]
+    The proof of \Cref{thm:main_convergence} follows from \Cref{prop:algo-conv}.
+\end{proof}
+
+
+\begin{proposition}[Convergence of the proximal anchored alternating algorithm]
+\label[proposition]{prop:algo-conv}
+Consider the sequence $\{\theta^{(t)}\}_{t\ge 0}$ generated by \Cref{alg:mle}, where each block subproblem includes the proximal terms
+\[
+\frac{\tau_t}{2}\|\gamma-\gamma^{(t)}\|_2^2+\frac{\tau_t}{2}\|U-U^{(t)}\|_F^2
+\quad\text{and}\quad
+\frac{\tau_t}{2}\|\mu-\mu^{(t)}\|_2^2+\frac{\tau_t}{2}\|V-V^{(t)}\|_F^2,
+\]
+with proximal parameters uniformly bounded away from zero ($\tau_t \ge \underline{\tau} > 0$) if $\tau$ is allowed to change during different iterations.
+
+\textbf{Part I: Global descent properties.} Suppose the structural assumptions (\Cref{asm:score-space,asm:algo-chart}) hold. Then:
+\begin{enumerate}
+    \item the sequence $\{\cL_n(\theta^{(t)})\}_{t\ge 0}$ is nonincreasing and convergent;
+    \item the iterates satisfy $\sum_{t=0}^\infty \|\theta^{(t+1)}-\theta^{(t)}\|^2 < \infty$.
+\end{enumerate}
+
+\textbf{Part II: Local sequence convergence.} Suppose further that \Cref{asm:algo-local-min,asm:algo-init} concerning the basin hold. Then:
+\begin{enumerate}
+    \setcounter{enumi}{2}
+    \item the iterates remain in $\Theta_{r,0}$ and the full anchored sequence $\theta^{(t)}$ converges to $\hat\theta_n$;
+    \item equivalently, before anchoring, the factor pair $(U^{(t)},V^{(t)})$ converges to the equivalence class of $(\hat U_n,\hat V_n)$ up to the column-sign convention, and after re-anchoring the convergence is ordinary parameter convergence.
+\end{enumerate}
+
+\textbf{Part III: Local linear rate.} Following Part II, the convergence is locally linear: there exist constants $C>0$ and $\rho\in(0,1)$ such that
+\[
+\|\theta^{(t)}-\hat\theta_n\| \le C\rho^t
+\quad\text{and}\quad
+\cL_n(\theta^{(t)})-\cL_n(\hat\theta_n) \le C\rho^t
+\]
+for all sufficiently large $t$.
+\end{proposition}
+In particular, whenever the sample criterion admits a unique local minimizer $\hat\theta_n$ in the identified chart $\Theta_{r,0}$, the output of \Cref{alg:mle} coincides with that local constrained MLE for all sufficiently accurate runs.
+\begin{proof}[Proof of \Cref{prop:algo-conv}]
+Let the parameter space be partitioned into two blocks: the judge block $\phi_1 = (\gamma, U)$ and the item block $\phi_2 = (\mu, V)$, such that the full parameter vector is $\theta = (\phi_1, \phi_2)$.
+
+\paragraph{Part I: Global Descent Properties.} 
+This part relies only on the structural conditions in \Cref{asm:score-space,asm:algo-chart} as the properties of proximal alternating minimization.
+
+\textit{Claim 1 (Nonincreasing and convergent objective):}
+For the judge block $\phi_1^{(t+1)}$, the update satisfies:
+\[
+\phi_1^{(t+1)} = \argmin_{\phi_1} \left\{ \cL_n(\phi_1, \phi_2^{(t)}) + \frac{\tau_t}{2}\|\phi_1 - \phi_1^{(t)}\|^2 \right\}.
+\]
+Comparing the value at the minimum $\phi_1^{(t+1)}$ against the previous iterate $\phi_1^{(t)}$ yields the sufficient decrease inequality for the first block:
+\[
+\cL_n(\phi_1^{(t+1)}, \phi_2^{(t)}) \le \cL_n(\phi_1^{(t)}, \phi_2^{(t)}) - \frac{\tau_t}{2}\|\phi_1^{(t+1)} - \phi_1^{(t)}\|^2.
+\]
+Applying identical logic to the item block update $\phi_2^{(t+1)}$ yields
+\[
+\cL_n(\phi_1^{(t+1)}, \phi_2^{(t+1)}) \le \cL_n(\phi_1^{(t+1)}, \phi_2^{(t)}) - \frac{\tau_t}{2}\|\phi_2^{(t+1)} - \phi_2^{(t)}\|^2.
+\]
+Adding these two inequalities provides the global sufficient decrease condition for a full iteration:
+\begin{equation}\label{eq:sufficient_decrease}
+\cL_n(\theta^{(t+1)}) \le \cL_n(\theta^{(t)}) - \frac{\tau_t}{2}\|\theta^{(t+1)} - \theta^{(t)}\|^2\leq \cL_n(\theta^{(t)}).
+\end{equation}
+The re-anchoring step (\Cref{alg:reanchor} and by \Cref{asm:algo-chart}) acts purely on the rotational and scaling equivalence classes of the bilinear factorization. Because it is an invariant transformation with respect to $S$, the objective value $\cL_n$ remains unchanged before and after re-anchoring. Therefore, the sequence of objective values $\{\cL_n(\theta^{(t)})\}$ is monotonically nonincreasing. Since the negative log-likelihood is bounded from below (by zero), the sequence converges to some limit $L^\ast \ge 0$.
+
+\textit{Claim 2 (Square-summability):}
+Summing the sufficient decrease inequality \eqref{eq:sufficient_decrease} from iteration $t=0$ to $T$ yields a telescoping sum:
+\[
+\sum_{t=0}^T \frac{\tau_t}{2}\|\theta^{(t+1)} - \theta^{(t)}\|^2 \le \cL_n(\theta^{(0)}) - \cL_n(\theta^{(T+1)}) \le \cL_n(\theta^{(0)}).
+\]
+Using the strict lower bound $\tau_t \ge \underline{\tau} > 0$ and taking the limit as $T \to \infty$, we obtain:
+\[
+\sum_{t=0}^\infty \|\theta^{(t+1)} - \theta^{(t)}\|^2 \le \frac{2}{\underline{\tau}}\cL_n(\theta^{(0)})< \infty.
+\]
+This finite sum guarantees square-summability of the iterate differences, which also trivially implies that the step sizes converge to zero: $\|\theta^{(t+1)} - \theta^{(t)}\| \to 0$ as $t \to \infty$.
+\paragraph{Part II: Local Sequence Convergence.}
+This part invokes the statistical and initialization conditions in \Cref{asm:algo-local-min,asm:algo-init}.
+
+\textit{Claim 3 (Convergence to the local minimizer $\hat{\theta}_n$):}
+By \Cref{asm:algo-local-min}, $\hat{\theta}_n$ is an isolated local minimizer. Therefore, there exists a compact neighborhood $\mathcal{B} \subset \Theta_{r,0}$ around $\hat{\theta}_n$ such that $\hat{\theta}_n$ is the strictly unique stationary point within $\mathcal{B}$, and $\cL_n(\theta) > \cL_n(\hat{\theta}_n)$ for all $\theta \in \mathcal{B} \setminus \{\hat{\theta}_n\}$. 
+
+By \Cref{asm:algo-init}, the initialization $\theta^{(0)}$ lies close enough to $\hat{\theta}_n$ such that the connected component of the sublevel set $\mathcal{S} := \{ \theta \in \mathcal{B} \mid \cL_n(\theta) \le \cL_n(\theta^{(0)}) \}$ is strictly contained in the interior of $\mathcal{B}$, given the positive definiteness of the Hessian matrix.
+Because $\mathcal{B}$ is compact and $\cL_n$ is continuous, the sublevel set $\mathcal{S}$ is also compact. 
+
+By the global descent property established in Part I, $\cL_n(\theta^{(t+1)}) \le \cL_n(\theta^{(t)})$ for all $t$. Thus, the sequence cannot enter the region where $\cL_n(\theta) > \cL_n(\theta^{(0)})$, meaning the entire sequence $\{\theta^{(t)}\}_{t=0}^\infty$ is strictly confined within the compact set $\mathcal{S}$. The re-anchoring step under \Cref{asm:algo-chart} preserves this containment.
+
+Because $\mathcal{S}$ is compact, the sequence $\{\theta^{(t)}\}$ must possess at least one limit point $\theta^\ast \in \mathcal{S}$ by the Bolzano-Weierstrass theorem. To characterize any such limit point, we invoke the first-order optimality conditions of the exact proximal block updates. For the judge block,
+\[
+\nabla_{\phi_1} \cL_n(\phi_1^{(t+1)}, \phi_2^{(t)}) + \tau_t (\phi_1^{(t+1)} - \phi_1^{(t)}) = 0.
+\]
+Taking the norm yields $\| \nabla_{\phi_1} \cL_n(\phi_1^{(t+1)}, \phi_2^{(t)}) \| = \tau_t \| \phi_1^{(t+1)} - \phi_1^{(t)} \|$. 
+By Part I and the boundedness of $\tau_t$, the right-hand side converges to zero, and thus the gradient mapping uniformly converges to zero. Because $\cL_n$ is continuously differentiable, any subsequence converging to $\theta^\ast$ satisfies $\nabla \cL_n(\theta^\ast) = 0$. 
+
+Therefore, every limit point of the sequence is a stationary point. But $\mathcal{S} \subset \mathcal{B}$, and by construction, $\hat{\theta}_n$ is the strictly unique stationary point within $\mathcal{B}$. Therefore, $\theta^\ast = \hat{\theta}_n$ is the unique limit point of the sequence. Since $\{\theta^{(t)}\}$ is a sequence in a compact set with exactly one limit point, the entire sequence globally converges to $\hat{\theta}_n$.
+
+\textit{Claim 4 (Pre- and post-anchoring equivalence):}
+Because the joint parameters converge, the sequence of latent evaluation scores $S^{(t)} = \gamma^{(t)}(\mu^{(t)})^\top + U^{(t)}(V^{(t)})^\top$ converges to the optimal empirical score matrix $\hat{S}_n$. Before the re-anchoring step is applied, the unanchored factor matrices $(U^{(t)}, V^{(t)})$ converge to the equivalence class $[\hat{U}_n, \hat{V}_n]$ defined by orthogonal rotations and scale-sign permutations. The re-anchoring map is a continuous function acting on $\Theta_{r,0}$ that uniquely identifies a representative from this equivalence class by fixing local anchor signs, and hence guarantees the ordinary parameter-wise convergence in the Euclidean space.
+
+\paragraph{Part III: Local linear rate.} This part draws the final conclusion on local convergence rate from the assumed and established properties of the objective function, the algorithm, and the topological structures of the global optimum.
+
+We restrict the domain of the objective function in $\mathcal{S}$, where $\cL$ demonstrates strong convexity. By Theorem 2 of \cite{karimi2016linear}, $\cL$ satisfies the Polyak-\L ojasiewicz (PL) inequality \citep{polyak1963gradient}, and by Appendix F of \cite{karimi2016linear}, satisfies the proximal-PL property, and by Appendix G of \cite{karimi2016linear}, has a local Kurdyka-\L ojasiewicz (KL) exponent $\theta=1/2$. The local linear convergence rate hence directly follows from Theorem 3.4 of \cite{attouch2010proximal}.
+\end{proof}
+
+
+
+
+
+
+
+
+
+\clearpage
+\section{Statistical infernece}\label{app:stat}
+\subsection{Regularity assumptions} \label{subsec:asm}
+We formalize the regularity conditions mentioned in \Cref{subsec:UQ} as the assumptions below.
+\begin{assumption}[Asymptotic sampling fractions]
+\label{asm:sampling}
+There exist fixed constants $w_{kij} \geq 0$ such that
+\({n_{kij}}/{n} \pto w_{kij}\) for all \((k,i,j)\in\Omega\) as \(n\to\infty\).
+\end{assumption}
+If $n_{kij}$ is non-random, i.e., the design of the experiment is deterministic, the convergence in probability is reduced to convergence in the ordinary sense.
+Note that a triple can be observed ($n_{kij}>0$) but still have asymptotic fraction $w_{kij}=0$. To account for this in subsequent analysis, we define:
+\begin{equation}\label{eq:active-graph}
+    \Omega_w:=\{(k,i,j)\in\Omega:w_{kij}>0\}
+\end{equation}
+as the set of asymptotically active triples.
+\begin{assumption}[Graph connectivity]
+\label{asm:graph}
+For each judge $k \in [K]$, the comparison graph $\mathcal{G}_k^w = ([N], \mathcal{E}_k^w)$ with edge set $\mathcal{E}_k^w = \{\{i,j\} : (k,i,j) \in \Omega_w\}$ is connected, and $0<p_{kij}^*<1$ for each active triple \((k,i,j)\in\Omega_w\).
+\end{assumption}
+By connectedness, we mean an undirected graph where a path (a sequence of connecting edges) exists between every pair of nodes (items). Therefore, under \Cref{asm:graph}, all the items assessed by a judge should be linked via one or more comparisons. However, it is not required that all possible pairs are directly compared and this scenario is accounted for via $\Omega_w$.
+\begin{assumption}[Non-degenerate concensus]
+\label{asm:score-space}
+    The true model \eqref{eq:score-decomp} holds with the true parameter $\theta^*\in \Theta_r$, and the true consensus direction $\mu^*\neq \zero$. 
+\end{assumption}
+\subsection[Proof of Theorem 2]{Proof of \Cref{thm:asymptotics}} \label{app:mle-proof}
+Recall that the structural parameter is estimated by the constrained maximum likelihood estimator
+\[
+\hat{\theta}:=(\hat{\gamma},\hat{\mu},\hat{U},\hat{V})
+\in
+\arg\min_{\theta\in\Theta_{r}}\mathcal{L}(S(\theta)),
+\qquad
+S(\theta):=\gamma\mu^\top+UV^\top.
+\]
+Since the likelihood depends on $\theta$ only through the induced score matrix $S(\theta)$, the proof is most naturally carried out on the centered score space
+\[
+\mathcal{S}:=\{S\in\RR^{K\times N}: S\one_N=\zero, \text{ and \Cref{cond:S-rank} holds}\}.
+\]
+The signs of the columns of $(U,V)$ can be anchored and fixed via, say, \Cref{rem:sign-id}, and then \Cref{prop:ident} ensures $\cS=\{S(\theta):\theta\in\Theta_r\}$.
+
+\begin{proof}[Proof of \Cref{thm:asymptotics}]\label{pf:asymptotics}
+For $S\in\mathcal S$, write
+\[
+\eta_{kij}(S):=S_{ki}-S_{kj},
+\qquad
+p_{kij}(S):=\frac{1}{1+\exp\{-\eta_{kij}(S)\}}.
+\]
+Also write $\bar Y_{kij}:=Y_{kij}/n_{kij}$. Then the normalized negative log-likelihood, viewed as a function of $S$, is
+\begin{equation}\label{eq:score-nll}
+M_n(S):=\frac1n\mathcal L(S)
+=
+\sum_{(k,i,j)\in\Omega}\frac{n_{kij}}{n}
+\Big[
+-\bar Y_{kij}\eta_{kij}(S)+\log\bigl(1+\exp\{\eta_{kij}(S)\}\bigr)
+\Big].
+\end{equation}
+By the strong law, for each fixed $(k,i,j)\in\Omega$,
+\[
+\bar Y_{kij}\xrightarrow{\mathrm{a.s.}} p_{kij}^\ast,
+\]
+and by \Cref{asm:sampling},
+\[
+\frac{n_{kij}}{n}\to w_{kij}.
+\]
+Since $\Omega$ is fixed and each summand in \eqref{eq:score-nll} is continuous in $S$, it follows that $M_n(S)$ converges uniformly on every compact subset of $\mathcal S$ to
+\begin{equation}\label{eq:population-score-criterion}
+M(S)
+:=
+\sum_{(k,i,j)\in\Omega}
+w_{kij}
+\Big[
+-p_{kij}^\ast\eta_{kij}(S)+\log\bigl(1+\exp\{\eta_{kij}(S)\}\bigr)
+\Big].
+\end{equation}
+
+Let $S^\ast=S(\theta^\ast)\in\cS$. Then, by the usual Bernoulli Kullback--Leibler identity,
+\begin{equation}\label{eq:kld-score}
+M(S)-M(S^\ast)
+=
+\sum_{(k,i,j)\in\Omega}
+w_{kij}\,
+\mathrm{KL}\!\left(
+\mathrm{Bern}(p_{kij}^\ast)\,\|\,\mathrm{Bern}(p_{kij}(S))
+\right)\ge 0.
+\end{equation}
+Equality holds if and only if $p_{kij}(S)=p_{kij}^\ast$ for all $(k,i,j)\in\Omega_w$, equivalently,
+\[
+S_{ki}-S_{kj}=S^\ast_{ki}-S^\ast_{kj}
+\qquad\text{for all }(k,i,j)\in\Omega_w.
+\]
+
+By \Cref{lem:active-ident}, equality in \eqref{eq:kld-score} implies $S=S^\ast$. Hence $S^\ast$ is the unique minimizer of $M$ on $\mathcal S$.
+
+%We next establish the global coercivity needed for a Wald-type consistency argument.
+
+We first prove the consistency of the score-space MLE $\hat S\in\arg\min_{S\in\cS}\mathcal L(S)$.
+
+Fix any open neighborhood $\mathcal O$ of $S^\ast$ in $\mathcal S$. Since $M$ is continuous and uniquely minimized at $S^\ast$, there exists $\delta>0$ such that
+\begin{equation}\label{eq:score-gap}
+\inf_{S\in\cS\setminus\mathcal O} M(S)\ge M(S^\ast)+3\delta.
+\end{equation}
+By \Cref{lem:score-coercive}, there exists $R<\infty$ such that
+\begin{equation}\label{eq:score-ball-gap}
+\inf_{S\in\cS:\,\|S\|_F>R} M(S)\ge M(S^\ast)+4\delta.
+\end{equation}
+Define the truncated score set
+\[
+K_R:=\{S\in\cS:\|S\|_F\le R\}.
+\]
+Since $K_R$ is closed and bounded in the finite-dimensional Euclidean space $\RR^{K\times N}$, it is compact. By uniform convergence on compact subsets,
+\[
+\sup_{S\in K_R}|M_n(S)-M(S)|\pto 0.
+\]
+Hence, with probability tending to one,
+\[
+\sup_{S\in K_R}|M_n(S)-M(S)|<\delta.
+\]
+On this event, for every $S\in K_R$,
+\[
+M_n(S^\ast)\le M(S^\ast)+\delta,
+\]
+whereas for every $S\in K_R\setminus\mathcal O$, by \eqref{eq:score-gap},
+\[
+M_n(S)\ge M(S)-\delta\ge M(S^\ast)+2\delta.
+\]
+Thus no minimizer of $M_n$ over $K_R$ can lie in $K_R\setminus\mathcal O$.
+
+Further, by the sample coercivity part of \Cref{lem:score-coercive}, with probability tending to one,
+\[
+\inf_{S\in\cS:\,\|S\|_F>R} M_n(S)>M(S^\ast)+2\delta.
+\]
+Hence no global minimizer of $M_n$ over $\cS$ can lie outside $K_R$. Combining the two conclusions, any global minimizer $\hat S$ of $M_n$ over $\cS$ must belong to $\mathcal O$ with probability tending to one, i.e.,
+\[
+\PP(\hat S\in\mathcal O)\to 1.
+\]
+Since $\mathcal O$ was arbitrary, we obtain
+\[
+\hat S\pto S^\ast.
+\]
+
+%We now pass from $\hat S$ to the parameter estimator $\hat\theta$. By \Cref{prop:ident}, after fixing the sign convention of \Cref{rem:sign-id}, the true parameter $\theta^\ast$ is uniquely identified from $S^\ast$. 
+
+We now pass the consistency in the score space into the parameter space after fixing the sign convention of \Cref{rem:sign-id}. Note that the mapping $S(\theta)$ is continuous. Conversely, the mapping established through \eqref{eq:mu} and \eqref{eq:gamma} is continuous and smooth. For the remaining SVD part for $\tilde{S}$, \Cref{cond:S-rank} guarantees the smoothness of the mapping by SVD perturbation theory \cite{bunse1991numerical,malvetti2022analytic}. Therefore, the mapping $S(\cdot)$ is invertible, and both $S(\cdot)$ and $S^{-1}(\cdot)$ is smooth. Continuous Mapping Theorem therefore yields
+\[
+\hat \theta \pto \theta^*.
+\]
+
+We finally derive asymptotic normality. 
+By the delta method, if $\sqrt{n}(\hat S - S^*) \dto \mathcal{N}(0, \Sigma_S)$ for some covariance $\Sigma_S$, then
+\[
+\sqrt{n}(\hat\theta - \theta^*) = \sqrt{n} D\Psi(S^*)(\hat S - S^*) + o_p(1) \dto \mathcal{N}(0, D\Psi(S^*) \Sigma_S D\Psi(S^*)^\top),
+\]
+where $\Psi: \mathcal{S} \to \Theta_r$ is the locally invertible recovery map of \Cref{prop:ident}, which has been shown to be smooth, and $D\Psi(S^*)$ is its Jacobian.
+
+The limiting covariance in the $S$-space is $\Sigma_S = \mathcal{I}_{\mathcal{S}}(S^*)^{-1}$, where
+\[
+\mathcal{I}_{\mathcal{S}}(S^*) = \sum_{(k,i,j)\in\Omega_w} w_{kij} p_{kij}^*(1-p_{kij}^*) \nabla_S \eta_{kij}(S^*) \nabla_S \eta_{kij}(S^*)^\top
+\]
+is positive definite by \Cref{prop:fisher_graph_nondegenerate} (Step 1--2).
+
+By the chain rule, $\nabla_\theta \eta_{kij}(\theta^*) = D\Psi(S^*)^\top \nabla_S \eta_{kij}(S^*)$, so
+$D\Psi(S^*) \mathcal{I}_{\mathcal{S}}(S^*) D\Psi(S^*)^\top = \mathcal{I}_{\Theta}(\theta^*)$ given by \eqref{eq:fisher-aggregate}, whose non-degeneracy is analyzed in \Cref{app:graph_fisher_nondegenerate}, especially \Cref{prop:fisher_graph_nondegenerate}.
+
+Therefore,
+\[
+\sqrt{n}(\hat\theta - \theta^*) \dto \mathcal{N}(0, \mathcal{I}_{\Theta}(\theta^*)^{-1}).
+\]
+This proves the theorem.
+
+We now calculate the explicit form of the Fisher Information.
+For each $(k,i,j)\in\Omega_w$, the score contribution is
+\[
+\ell_{kij}(\theta)
+=
+Y_{kij}\eta_{kij}(\theta)-n_{kij}\log(1+\exp\{\eta_{kij}(\theta)\}),
+\]
+where
+\[
+\eta_{kij}(\theta)=\gamma_k(\mu_i-\mu_j)+U_{k,:}(V_{i,:}-V_{j,:})^\top.
+\]
+The per-triple Fisher information is
+\[
+\mathcal I_{kij}(\theta^\ast)
+=
+\EE\!\left[
+\nabla_\theta\log p(Y_{kij}\mid\theta^\ast)\,
+\nabla_\theta\log p(Y_{kij}\mid\theta^\ast)^\top
+\right]
+=
+n_{kij}p_{kij}^\ast(1-p_{kij}^\ast)
+\nabla_\theta\eta_{kij}(\theta^\ast)\nabla_\theta\eta_{kij}(\theta^\ast)^\top.
+\]
+Hence the aggregate normalized Fisher information is
+\[
+\mathcal I_n(\theta^\ast)
+=
+\sum_{(k,i,j)\in\Omega_w}
+\frac{n_{kij}}{n}
+p_{kij}^\ast(1-p_{kij}^\ast)
+\nabla_\theta\eta_{kij}(\theta^\ast)\nabla_\theta\eta_{kij}(\theta^\ast)^\top,
+\]
+and since $n_{kij}/n\to w_{kij}$,
+\[
+\mathcal I_n(\theta^\ast)\pto \mathcal I_\Theta(\theta^\ast).
+\]
+
+The gradient blocks are
+\begin{align*}
+\frac{\partial \eta_{kij}}{\partial \gamma_k} &= \mu_i-\mu_j,\\
+\frac{\partial \eta_{kij}}{\partial \mu_\ell} &= \gamma_k(\delta_{i\ell}-\delta_{j\ell}),\\
+\frac{\partial \eta_{kij}}{\partial U_{k,m}} &= (V_i-V_j)_m,\\
+\frac{\partial \eta_{kij}}{\partial V_{\ell,m}} &= U_{k,m}(\delta_{i\ell}-\delta_{j\ell}).
+\end{align*}
+\end{proof}
+
+\subsection{Auxiliary lemmas} \label{app:lemmas}
+Two lemmas used in the proof of \Cref{thm:asymptotics} are established below.
+
+
+\begin{lemma}[Injectivity of active score differences]
+\label[lemma]{lem:active-ident}
+Under \Cref{asm:graph}, if $S,S'\in\mathcal S$ satisfy
+\[
+S_{ki}-S_{kj}=S'_{ki}-S'_{kj}
+\qquad\text{for all }(k,i,j)\in\Omega_w,
+\]
+then $S=S'$.
+\end{lemma}
+\begin{proof}[Proof of \Cref{lem:active-ident}]
+Fix a judge $k$ and let $h_k:=S_{k,:}-S'_{k,:}\in\RR^N$. The assumption implies
+\[
+h_{ki}-h_{kj}=0
+\qquad\text{for every }\{i,j\}\in\mathcal E_k^w.
+\]
+Because the graph $\mathcal G_k^w$ is connected, $h_k$ must be constant across items, say
+\[
+h_k=c_k\one_N.
+\]
+Since both $S$ and $S'$ lie in the centered space $\mathcal S$, we also have
+\[
+h_k^\top\one_N=0.
+\]
+Therefore $Nc_k=0$, so $c_k=0$ and hence $h_k=0$. This holds for every judge $k$, and thus $S=S'$.
+\end{proof}
+
+
+\begin{lemma}[Coercivity]
+\label[lemma]{lem:score-coercive}
+Under \Cref{asm:graph}, the population criterion $M$ in \eqref{eq:population-score-criterion} is coercive on $\mathcal S$, i.e.
+\[
+\|S\|_F\to\infty,\quad S\in\mathcal S
+\qquad\Longrightarrow\qquad
+M(S)\to\infty.
+\]
+Moreover, with probability tending to one, the sample criterion $M_n$ in \eqref{eq:score-nll} is also coercive on $\mathcal S$.
+\end{lemma}
+\begin{proof}[Proof of \Cref{lem:score-coercive}]
+We first prove the coercivity of the population criterion.
+
+For each fixed active triple $(k,i,j)\in\Omega_w$, define
+\[
+\phi_{kij}(x):=-p_{kij}^\ast x+\log(1+e^x).
+\]
+Because $p_{kij}^\ast\in(0,1)$, the function $\phi_{kij}$ is continuous, nonnegative, and satisfies
+\[
+\phi_{kij}(x)\to\infty
+\qquad\text{as }|x|\to\infty.
+\]
+Indeed, as $x\to+\infty$,
+\[
+\phi_{kij}(x)=(1-p_{kij}^\ast)x+o(x)\to\infty,
+\]
+while as $x\to-\infty$,
+\[
+\phi_{kij}(x)=-p_{kij}^\ast x+o(1)\to\infty.
+\]
+
+Now fix a judge $k$ and write the $k$th row of $S$ as
+\[
+s_k:=(S_{k1},\dots,S_{kN})^\top\in\RR^N.
+\]
+Since $S\in\mathcal S$, we have $s_k^\top\one_N=0$. Because $\mathcal G_k^w$ is connected and $N$ is fixed, we have
+\begin{equation}\label{eq:row-graph-bound}
+\|s_k\|_2
+\le \sqrt{N}\|s_k\|_1 \le
+2\sqrt{N}\sum_{\{i,j\}\in\mathcal E_k^w}|s_{k,i}-s_{k,j}|.
+\end{equation}
+To see this, fix a reference node in $\mathcal G_k^w$ and telescope along paths from the reference node to each other node; since the graph is finite and connected, all resulting path lengths are uniformly bounded.
+
+Suppose now that $\|S\|_F\to\infty$ with $S\in\mathcal S$. Then for some judge $k$ we must have $\|s_k\|_2\to\infty$. By \eqref{eq:row-graph-bound}, this implies that for at least one active edge $\{i,j\}\in\mathcal E_k^w$,
+\[
+|S_{ki}-S_{kj}|=|s_{k,i}-s_{k,j}|\to\infty.
+\]
+Since the corresponding summand in $M(S)$ is
+\[
+w_{kij}\phi_{kij}(S_{ki}-S_{kj}),
+\]
+with $w_{kij}>0$, it follows that this term diverges to $+\infty$. All other summands are nonnegative, and therefore
+\[
+M(S)\to\infty.
+\]
+This proves population coercivity.
+
+We next prove sample coercivity. On the event
+\[
+\mathcal A_n:=\{0<Y_{kij}<n_{kij}\text{ for all }(k,i,j)\in\Omega_w\},
+\]
+define
+\[
+\phi_{kij,n}(x):=-\bar Y_{kij}x+\log(1+e^x).
+\]
+Whenever $0<\bar Y_{kij}<1$, the same argument as above shows that
+\[
+\phi_{kij,n}(x)\to\infty
+\qquad\text{as }|x|\to\infty.
+\]
+Since $p_{kij}^\ast\in(0,1)$ and $n_{kij}\to\infty$ for each active triple, we have
+\[
+\PP\bigl(Y_{kij}=0 \text{ or } Y_{kij}=n_{kij}\bigr)\to 0,
+\]
+and therefore, by a union bound over the finite set $\Omega_w$,
+\[
+\PP(\mathcal A_n)\to1.
+\]
+On $\mathcal A_n$, the same graph argument used for the population criterion shows that
+\[
+\|S\|_F\to\infty,\quad S\in\mathcal S
+\qquad\Longrightarrow\qquad
+M_n(S)\to\infty.
+\]
+Thus $M_n$ is coercive on $\mathcal S$ with probability tending to one.
+\end{proof}
+
+
+\subsection{Graph-induced nondegeneracy of the Fisher information}
+\label{app:graph_fisher_nondegenerate}
+
+In \Cref{thm:asymptotics}, the asymptotic normality of the constrained maximum likelihood estimator was stated under the nonsingularity of the Fisher information matrix
+\[
+I_{\Theta}(\theta^*)
+=
+\sum_{(k,i,j)\in\Omega_w}
+w_{kij} p_{kij}^*(1-p_{kij}^*)
+\nabla_\theta \eta_{kij}(\theta^*)
+\nabla_\theta \eta_{kij}(\theta^*)^\top.
+\]
+In this section, we show that such nondegeneracy can be derived from the active comparison
+graph structure together with a local regularity condition on the structured score map.
+The argument is inspired by the graph-Laplacian viewpoint for pairwise-comparison Fisher
+information developed in \cite{han2025statisticalinferencepairwisecomparison}, where positivity of the Fisher information is obtained from graph connectivity (after quotienting out the additive invariance of pairwise-comparison
+models). In our setting, the proof proceeds in two layers:
+\begin{enumerate}
+    \item establish positive definiteness of the Fisher information in the ambient row-centered score space \(\mathcal S\) via judge-wise connected active graphs; and
+    \item pull this positivity back to the structured parameter space \(\Theta_r\) through the differential of the map \(\Phi(\theta)=S(\theta)=\gamma\mu^\top + UV^\top\).
+\end{enumerate}
+The second step is needed because our inferential target is not the unrestricted score matrix
+\(S\), but the constrained latent parameter \(\theta=(\gamma,\mu,U,V)\).
+
+We first isolate the local regularity condition needed to pass from score-space
+nondegeneracy to parameter-space nondegeneracy.
+
+\begin{assumption}[Local chart regularity of the structured score map]
+\label{asm:local-chart-regular}
+Let \(\theta^*=(\gamma^*,\mu^*,U^*,V^*)\in\Theta_r\) denote the true parameter.
+After fixing the column signs of \((U,V)\) according to a local sign convention, there exists a neighborhood of \(\theta^*\) in \(\Theta_r\) that is parameterized by a smooth local chart on the manifold. Moreover, the differential of the structured score map
+\[\Phi:\Theta_r \to \mathcal S,
+\qquad
+\Phi(\theta)=S(\theta)=\gamma\mu^\top + UV^\top,
+\]
+is injective at \(\theta^*\) on the tangent space \(T_{\theta^*}\Theta_r\). That is,
+\[D\Phi(\theta^*)[\delta\theta]=0,\ \delta\theta\in T_{\theta^*}\Theta_r
+\quad\Longrightarrow\quad\delta\theta=0.
+\]
+\end{assumption}
+Assumption \ref{asm:local-chart-regular} is the infinitesimal analog of parameter identifiability at the local chart of $\theta^*$.
+\begin{proposition}[Graph-induced nondegeneracy of the Fisher information]
+    \label[proposition]{prop:fisher_graph_nondegenerate}
+    Suppose \Cref{asm:sampling,asm:graph,asm:score-space} hold, and assume in addition \Cref{asm:local-chart-regular}. Let
+    \[
+    S^*:=S(\theta^*)=\gamma^*{\mu^*}^\top + U^*{V^*}^\top.
+    \]
+    
+    Then the Fisher information matrix
+    \[
+    I_{\Theta}(\theta^*)
+    =
+    \sum_{(k,i,j)\in\Omega_w}
+    \omega_{kij}\,
+    \nabla_\theta \eta_{kij}(\theta^*)
+    \nabla_\theta \eta_{kij}(\theta^*)^\top
+    \]
+    is positive definite on the identified tangent space \(T_{\theta^*}\Theta_r\); that is,
+    \[
+    \delta\theta^\top I_{\Theta}(\theta^*)\delta\theta>0
+    \qquad
+    \text{for every }0\neq \delta\theta\in T_{\theta^*}\Theta_r.
+    \]
+    Consequently, \(I_\Theta(\theta^*)\) is nonsingular in the local identified coordinates.
+\end{proposition}
+
+\begin{proof}[Proof of \Cref{prop:fisher_graph_nondegenerate}]
+The proof is divided into three steps.
+
+\paragraph{Step 1: Score-space Fisher information as a weighted Laplacian form.}
+Temporarily parameterize the model by the row-centered score matrix
+\[
+\mathcal S:=\{S\in\mathbb R^{K\times N}:S\one_N=0\}.
+\]
+For a fixed active triple \((k,i,j)\in\Omega_w\), recall that
+\[
+\eta_{kij}(S):=S_{ki}-S_{kj}.
+\]
+Under the binomial Bradley--Terry--Luce model, the population Fisher information in the ambient score parameterization is
+\[
+I_{\mathcal S}(S^*)
+=
+\sum_{(k,i,j)\in\Omega_w}
+\omega_{kij}\,
+\nabla_S \eta_{kij}(S^*)
+\nabla_S \eta_{kij}(S^*)^\top,
+\]
+where \(\omega_{kij}=w_{kij}p_{kij}^*(1-p_{kij}^*)>0\).
+
+Let \(H=(H_{kn})\in\mathcal S\) be an arbitrary score perturbation. Then the corresponding quadratic form is
+\begin{equation}
+\label{eq:score_fisher_quadratic}
+\langle H, I_{\mathcal S}(S^*)H\rangle=\sum_{(k,i,j)\in\Omega_w}\omega_{kij}(H_{ki}-H_{kj})^2.
+\end{equation}
+Indeed, for each triple \((k,i,j)\), the directional derivative of \(\eta_{kij}(S)\) along \(H\) is
+\[
+D\eta_{kij}(S^*)[H]=H_{ki}-H_{kj},
+\]
+which gives \eqref{eq:score_fisher_quadratic}.
+
+Now fix a judge \(k\in[K]\), and write \(h_k=(H_{k1},\dots,H_{kN})^\top\in\mathbb R^N\).
+Then the \(k\)-th summand in \eqref{eq:score_fisher_quadratic} becomes
+\[
+\sum_{\{i,j\}\in E_k^w}\omega_{kij}(h_{k,i}-h_{k,j})^2=h_k^\top L_k h_k,
+\]
+where \(L_k\) is the weighted graph Laplacian of the active graph \(G_k^w=([N],E_k^w)\) with edge weights \(\omega_{kij}\). Therefore
+\begin{equation}
+\label{eq:block_laplacian_decomp}
+\langle H, I_{\mathcal S}(S^*)H\rangle
+=
+\sum_{k=1}^K h_k^\top L_k h_k.
+\end{equation}
+
+\paragraph{Step 2: Judge-wise graph connectivity implies positivity on \(\mathcal S\).}
+By \Cref{asm:graph}, each active graph \(G_k^w\) is connected.
+Because \(L_k\) is the weighted Laplacian of the connected graph \(G_k^w\) with strictly positive edge weights, for every \(x\in\mathbb R^N\),
+\[
+x^\top L_k x=\sum_{\{i,j\}\in E_k^w}\omega_{kij}(x_i-x_j)^2 \ge 0.
+\]
+Hence \(x\in\ker(L_k)\) implies \(x^\top L_k x=0\), so \(x_i=x_j\) for every edge \(\{i,j\}\in E_k^w\). Since \(G_k^w\) is connected, \(x\) must be constant on all vertices,
+that is, \(x=c\one_N\). Conversely, \(L_k\one_N=0\). Therefore,
+\[
+\ker(L_k)=\mathrm{span}\{\one_N\}.
+\]
+
+Hence, for each \(k\),
+\[
+h_k^\top L_k h_k=0\quad\Longleftrightarrow\quad h_k=c_k \one_N
+\text{ for some }c_k\in\mathbb R.
+\]
+But \(H\in\mathcal S\) means every row of \(H\) is centered, i.e.
+\[
+H\one_N=0.
+\]
+Equivalently,
+\[
+\one_N^\top h_k=0 \qquad\text{for all }k\in[K].
+\]
+If \(h_k=c_k\one_N\), then \(0=\one_N^\top h_k = Nc_k\), so \(c_k=0\), and therefore \(h_k=0\).
+Since this holds for every \(k\), we conclude that
+\[
+\langle H, I_{\mathcal S}(S^*)H\rangle=0
+\quad\Longrightarrow\quad
+H=0.
+\]
+Thus \(I_{\mathcal S}(S^*)\) is positive definite on \(\mathcal S\):
+\begin{equation}
+\label{eq:score_PD}
+\langle H, I_{\mathcal S}(S^*)H\rangle>0
+\qquad
+\forall\, 0\neq H\in\mathcal S.
+\end{equation}
+
+\paragraph{Step 3: Pulling back positivity to the structured parameter space $\Theta_r$.}
+Let \(\delta\theta\in T_{\theta^*}\Theta_r\) be an arbitrary tangent perturbation, and define the induced score perturbation
+\[
+H:=D\Phi(\theta^*)[\delta\theta]\in\mathcal S.
+\]
+Since
+\[
+\Phi(\theta)=\gamma\mu^\top + UV^\top,
+\]
+the first-order variation of \(S(\theta)\) at \(\theta^*\) is
+\begin{equation}
+\label{eq:dPhi_expansion}
+H
+=
+\delta\gamma\,{\mu^*}^\top
++
+\gamma^*\,\delta\mu^\top
++
+\delta U\,{V^*}^\top
++
+U^*\,\delta V^\top.
+\end{equation}
+
+For each active triple \((k,i,j)\in\Omega_w\), the directional derivative of the structured logit difference satisfies
+\[
+D\eta_{kij}(\theta^*)[\delta\theta]
+=
+H_{ki}-H_{kj}.
+\]
+Equivalently,
+\[
+\nabla_\theta \eta_{kij}(\theta^*)^\top \delta\theta
+=
+H_{ki}-H_{kj}.
+\]
+Therefore,
+\begin{align}
+\delta\theta^\top I_\Theta(\theta^*)\delta\theta
+&=
+\sum_{(k,i,j)\in\Omega_w}\omega_{kij}\bigl(\nabla_\theta \eta_{kij}(\theta^*)^\top\delta\theta\bigr)^2\nonumber\\
+&=\sum_{(k,i,j)\in\Omega_w}\omega_{kij}(H_{ki}-H_{kj})^2\nonumber\\
+&=\langle H, I_{\mathcal S}(S^*)H\rangle.
+\label{eq:pullback_quadratic}
+\end{align}
+
+Now suppose
+\[
+\delta\theta^\top I_\Theta(\theta^*)\delta\theta=0.
+\]
+Then \eqref{eq:pullback_quadratic} and \eqref{eq:score_PD} imply that \(H=0\). That is,
+\[
+D\Phi(\theta^*)[\delta\theta]=0.
+\]
+By Assumption \ref{asm:local-chart-regular}, the differential \(D\Phi(\theta^*)\) is injective
+on \(T_{\theta^*}\Theta_r\), hence \(\delta\theta=0\).
+
+We have thus shown that
+\[
+\delta\theta^\top I_\Theta(\theta^*)\delta\theta>0
+\qquad
+\forall\, 0\neq \delta\theta\in T_{\theta^*}\Theta_r,
+\]
+which proves positive definiteness of \(I_\Theta(\theta^*)\) on the identified tangent space.
+Therefore \(I_\Theta(\theta^*)\) is nonsingular in any local identified coordinate system.
+\end{proof}
+
+\begin{remark}[Interpretation of the two-layer argument]
+\label{rem:two_layer_argument}
+The proposition separates the source of nondegeneracy into two logically distinct parts.
+
+Unlike in ordinary BTL models, graph connectivity alone is not sufficient for Fisher nondegeneracy in the structured latent-factor parameterization, due to parameter-level identifiability from local regularity of the structured map.. It must be combined with local injectivity of the decomposition map reflected in \Cref{asm:local-chart-regular}.
+\end{remark}
+
+\begin{remark}[Relation to the pairwise-comparison literature]
+\label{rem:relation_pairwise_inference}
+The proof above is inspired by recent asymptotic-inference theory for pairwise-comparison models, where the Fisher information is represented as a graph-Laplacian quadratic form and its nondegeneracy is deduced from graph connectivity after quotienting out the additive invariance of pairwise scores \citep{han2025statisticalinferencepairwisecomparison}. The present argument extends that idea to the heterogeneous judge-aware model by treating the structured parameter space \(\Theta_r\) as a smooth submanifold of the row-centered score space \(\mathcal S\), and then pulling back the ambient Fisher information through the differential of the map \(\Phi(\theta)=\gamma\mu^\top+UV^\top\).
+
+In other words, the graph structure controls nondegeneracy in the ambient score geometry, whereas the constraint geometry of \(\Theta_r\) controls whether such nondegeneracy is retained after passing to the latent parameters.
+\end{remark}
+
+
+\subsection{Partial sampling scheme} \label{subsec:partial-sample}
+
+
+Let $\mathcal{G}:=([N],\mathcal{E})$ denote the pooled graph where $\mathcal{E}:=\{\{i,j\}:(k,i,j)\in\Omega_w\text{ for some }k\}$ denotes the edge set. If the graph belonging to a judge, say, $\mathcal{G}_k$ is not connected, then the sampling is considered partial. 
+For example, a judge may compare Item 1, 2, 3 and 4, 5, 6, but the graphs of 1--2--3 and 4--5--6 are separated. Under such a scenario, identification becomes the major obstacle to statistical analysis. The judge may assign higher scores to all 1, 2, and 3, and lower scores to all 4, 5, and 6 without breaking \Cref{eq:S-id} or altering the likelihood. Therefore, assumptions should be made to rule out such ambiguity: the true parameter shall lie in a region where such purturbation must make it impossible for $S$ to still admit the structured representation \eqref{eq:score-decomp} with unchanged $r$. 
+
+We define the structured score manifold
+\[\mathcal{M}_r:=\{S=\gamma\mu^\top+UV^\top:(\gamma,\mu,U,V)\in\Theta_r\}
+\cap \mathcal{S},
+\]
+and let $\mathcal{T}^*:=T_{S^*}\mathcal{M}_r$ be its tangent space at $S^*$ to characterize the potential local perturbations on $S^*$.
+\begin{assumption}[Identification under partial overlap]
+\label{asm:graph-partial}
+Every nonzero local perturbation of the structured score matrix changes at least one observed pairwise log-odds difference. Equivalently, if $H\in\mathcal{T}^*$ satisfies
+\[
+H_{ki}-H_{kj}=0
+\qquad\text{for all }(k,i,j)\in\Omega_w,
+\]
+then we must have $H=0$.
+\end{assumption}
+On the other hand, we assume connectivity on the pooled graph to ensure that there are shared nodes (items) that connect the disconnected parts of each judge, so information is expected to be aligned with the help of these connecting nodes.
+\begin{assumption}[Connectivity of the pooled graph]\label{asm:pooled-connect}
+    The pooled graph $\mathcal{G}=([N],\mathcal{E})$ with edge set $\mathcal{E}:=\{\{i,j\}:(k,i,j)\in\Omega_w\text{ for some }k\}$ is connected.
+\end{assumption}
+\begin{remark}[How overlap helps]
+The point of \Cref{asm:graph-partial,asm:pooled-connect} is that overlap lets different judges' local comparisons be aligned through the shared low-rank structure. For example, suppose judge 1 compares items $(1,2)$ and judge 2 compares items $(2,3)$, but neither judge compares all three pairs. Item 2 then serves as an overlap point linking the two local pieces of information. \Cref{asm:graph-partial} dictates that, after imposing the structured model, such overlaps are rich enough that one cannot change the latent score matrix in a nontrivial way without altering at least one observed comparison.
+\end{remark}
+\begin{assumption}[Local compact parameter chart]
+\label{asm:local-compact}
+There exists a compact set $\Theta_{r,0}\subset\Theta_r$ such that $\theta^*$ lies in its relative interior after fixing the local anchor signs of the columns of $U$ and $V$. And the population structured criterion
+\[
+m(\theta):=\sum_{(k,i,j)\in\Omega_w}w_{kij}\Big[-p_{kij}^*\eta_{kij}(\theta)+\log\big(1+\exp\{\eta_{kij}(\theta)\}\big)\Big],
+\]
+has $\theta^*$ as its unique minimizer over $\Theta_{r,0}$.
+\end{assumption}
+This assumption replaces the coercivity established in \Cref{lem:score-coercive} under \Cref{asm:graph} (full sampling setting). As the identification constraint becomes obscured for the entire space $\mathcal{S}$, this assumption, together with \Cref{asm:local-compact}, dictates that even though the likelihood may be flat along component-wise shifts of an unrestricted row, those shifts should either be infeasible within the fixed-rank structured model or break the $\Theta_{r,0}$ boundary that we set.
+
+By the standard asymptotic theory of MLE, the asymptotic properties of $\hat{\theta}$ of \Cref{thm:asymptotics} still hold under \Cref{asm:pooled-connect,asm:graph-partial,asm:sampling,asm:score-space,asm:graph-partial}.
+
+In practice, however, we need to avoid this setting due to the difficulty in verifying \Cref{asm:local-compact,asm:graph-partial}, unless the sample size is really limited.
+
+
+
+\clearpage
+\section{Rank selection}\label{app:rank-selection}
+
+\subsection{Rank selection criteria}
+\label{app:subsec:rank-selection}
+We offer three ways to select the rank $r$ of our model following \Cref{subsec:rank-selection}.
+\paragraph{Cross Validation.}
+In experiments with dense comparison graphs, we can mask a validation subset of the pairwise comparisons $\Omega_{\text{val}} \subset \Omega$. For each candidate rank $r$, we estimate the parameters $\hat{\theta}_r$ on the training set and select the $r$ that minimizes the negative log-likelihood on $\Omega_{\text{val}}$. This guards against overfitting by measuring generalizability and is hence suitable for empirical practices.
+
+\paragraph{Spectral Residual Analysis.}
+According to \eqref{eq:S-residual}, estimation of the preference residuals $UV^\top$ as a whole does not depend on $r$. Therefore, as a straightforward diagnostic, $r$ can be selected by analyzing the spectral decay of $UV^\top$, which can be estimated by fitting the consensus-only model ($S_0 = \gamma \mu^\top$) and compute $S-S_0$. A scree plot of SVD of this residual matrix can help locate the optimal $r$ which typically corresponds to the elbow of this plot, reflecting the dominant $r$ disagreement aspects. This approach is more statistically heuristic and offers interpretation to our model.
+
+\paragraph{Information-theoretic approach: BIC.}
+
+We also propose BIC method for hyperparameter selection, which is statistically guaranteed to consistently estimate the true rank $r^*$ of the underlying judge preference matrix $(UV^\top)^*$.
+Note that the BIC for a candidate rank $r$ is defined as
+\begin{equation} \label{eq:BIC}
+    \text{BIC}(r) = 2 \mathcal{L}_n(\hat{\theta}_r) + d_r \log n,
+\end{equation}
+where $\mathcal{L}_n(\hat{\theta}_r)$ is the minimized negative log-likelihood under rank $r$, $d_r := r(K + N - r-3)$ is the effective degrees of freedom (having accounted for the identifiability constraints).
+
+
+\subsection[Proof of Theorem \ref{thm:bic_consistency}]{Proof of \Cref{thm:bic_consistency}}\label{app:subsec:bic_proof}
+We provide the formal proof for Theorem \ref{thm:bic_consistency}. The goal is to show that minimizing the Bayesian Information Criterion (BIC) consistently selects the true heterogeneity rank $r^*$ as the total number of comparisons $n \to \infty$ while the comparison graph $\Omega$ remains fixed. Note that the sample log-likelihood is $-\cL_n(\theta)$ throughout the paper.
+
+\begin{proof}[Proof of \Cref{thm:bic_consistency}]
+Let $\mathbb{P}^*$ denote the true data-generating distribution parameterized by $\theta^* \in \Theta_{r^*}$, where $\Theta_r$ is the constrained parameter space corresponding to rank $r$ (adhering to the identifiability constraints in \Cref{prop:ident}). 
+To prove $\lim_{n \to \infty} \mathbb{P}\left(r^*=\arg\min_r \text{BIC}(r)\right) = 1$, we must show that for any $r \neq r^*$, $\mathbb{P}\left(\text{BIC}(r) - \text{BIC}(r^*) > 0\right) \to 1$. We partition the analysis into two cases: the under-parameterized regime ($r < r^*$) and the over-parameterized regime ($r > r^*$).
+
+\paragraph{Case 1: Under-parameterized regime ($r < r^*$).}
+When $r < r^*$, the candidate model space $\Theta_r$ does not contain the true parameter $\theta^*$. Because the BTL model is a strictly concave Generalized Linear Model (GLM) mapping bounded logits to probabilities, and our identifiability constraints make the parameterization injective, $\theta^*$ cannot be perfectly approximated by any $\theta \in \Theta_r$. 
+
+Following the argument of \Cref{pf:asymptotics} (especially \eqref{eq:kld-score}), by the properties of the KL divergence, the maximum expected log-likelihood under the restricted space $\Theta_r$ is strictly less than under the true parameter:
+\begin{equation*}
+    \delta_r := M(\theta^*) - \sup_{\theta \in \Theta_r} M(\theta) > 0
+\end{equation*}
+By the Uniform Law of Large Numbers (since $\Theta$ is compact and the BTL log-likelihood is continuous and bounded), we have $\frac{1}{n}\mathcal{L}_n(\hat{\theta}_r) \pto \sup_{\theta \in \Theta_r} M(\theta)$ and $\frac{1}{n}\mathcal{L}_n(\hat{\theta}_{r^*}) \pto M(\theta^*)$. 
+
+The difference in BIC is
+\begin{align}
+    \text{BIC}(r) - \text{BIC}(r^*) &= -2\left(\mathcal{L}_n(\hat{\theta}_{r^*}) - \mathcal{L}_n(\hat{\theta}_r)\right) + (d_r - d_{r^*})\log(n) \label{eq:bic-diff}
+    \\
+    &= -2n \left( \frac{1}{n}\mathcal{L}_n(\hat{\theta}_{r^*}) - \frac{1}{n}\mathcal{L}_n(\hat{\theta}_r) \right) + (d_r - d_{r^*})\log(n). \notag
+\end{align}
+Since the term inside the first parenthesis converges in probability to $\delta_r > 0$, the likelihood difference scales as $\mathcal{O}_p(n)$. But the penalty difference $(d_r - d_{r^*})\log(n)$ only scales as $\mathcal{O}(\log n)$, making the linear growth of the likelihood deficit dominate. Thus, for any $r < r^*$,
+\begin{equation*}
+    \lim_{n \to \infty} \mathbb{P}\left( \text{BIC}(r) - \text{BIC}(r^*) > 0 \right) = 1.
+\end{equation*}
+
+\paragraph{Case 2: Over-parameterized regime ($r > r^*$)}
+When $r > r^*$, the candidate model space $\Theta_r$ strictly nests the true model space $\Theta_{r^*}$ in terms of closure (i.e., $\overline{\Theta_{r^*}} \subset \overline{\Theta_r}$). Therefore, $\theta^* \in \overline{\Theta_r}$, and the model can be viewed as correctly specified but over-parameterized.
+
+Because the true model is nested within the larger model, we invoke theories on Likelihood Ratio (LR) test. Under the identifiability constraints (\Cref{subsec:id}) and assumptions required by asymptotic normality, the Fisher Information Matrix evaluated at $\theta^*$ is non-singular. 
+Note that under the null hypothesis that the true parameter lies in the restricted space $\Theta_{r^*}$, the log-likelihood ratio statistic may not converge in law to a chi-squared distribution, as the true parameter $\theta^*$ essentially lies on the boundary of $\Theta_r$. However,  $-2\left(\mathcal{L}_n(\hat{\theta}_r) - \mathcal{L}_n(\hat{\theta}_{r^*})\right)$ is still $\cO_p(1)$ by theories on the boundary behaviour of LR [\citealp[Theorem 3]{liang1987asymptotic}] and tests on reduced-rank regression [\citealp[Theorem 3.2]{Robin_Smith_2000}].
+Therefore, the maximum improvement in log-likelihood gained by fitting $r - r^*$ spurious components is bounded in probability. But $r > r^*$ leads to $d_r > d_{r^*}$ and consequently the penalty term $(d_r - d_{r^*})\log(n) \to \infty$ as $n \to \infty$. 
+Thus, for any $r > r^*$:
+\begin{equation*}
+    \lim_{n \to \infty} \mathbb{P}\left( \text{BIC}(r) - \text{BIC}(r^*) > 0 \right) = 1.
+\end{equation*}
+
+Combining Case 1 and Case 2, the true rank $r^*$ strictly minimizes the BIC with probability tending to 1 as the sample size $n \to \infty$, i.e., $\lim_{n \to \infty} \mathbb{P}\left(\arg\min_r \text{BIC}(r)=r^*\right) = 1$.
+\end{proof}
+
+\clearpage
+\section{Detailed Experimental Instructions}
+\label{app:instructions}
+
+This appendix records the intended local execution protocol so the empirical section can be reproduced and extended without changing the main-paper narrative.
+
+\subsection{Repository structure}
+
+All empirical runs should use the \texttt{ranking} repository created for this project. The relevant files are:
+\begin{itemize}[leftmargin=1.5em]
+  \item \texttt{src/ranking\_judge/}: runner, providers, cache, and prompt parsing code;
+  \item \texttt{configs/providers/}: free-tier and paid provider presets;
+  \item \texttt{configs/experiments/}: reusable experiment definitions;
+  \item \texttt{data/examples/}: toy and near-tie JSONL examples;
+  \item \texttt{runs/}: per-experiment outputs.
+\end{itemize}
+
+\subsection{Environment setup}
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item Create the local conda environment from \texttt{environment.yml}.
+  \item Install the package in editable mode with \texttt{python -m pip install -e .}.
+  \item Set exactly one provider key for the intended run, for example \texttt{OPENROUTER\_API\_KEY} or \texttt{GEMINI\_API\_KEY}.
+  \item Confirm that the target provider config points to the intended model and base URL before running large batches.
+\end{enumerate}
+
+\subsection{Data preparation}
+
+\paragraph{Synthetic block.}
+Sample a consensus vector $\mu$, nonnegative judge reliabilities $\gamma$, and low-rank factors $U$ and $V$. Form $S = \gamma \mu^\top + UV^\top$, then generate repeated pairwise outcomes from Equation~\eqref{eq:judge-aware-link}. The simulation should vary both the dispersion of $\gamma$ and the magnitude of $UV^\top$ so that reliability and structured disagreement can be disentangled.
+
+\paragraph{Prompt-sensitivity block.}
+Use MT-Bench-style pairwise rows with fields \texttt{example\_id}, \texttt{question}, \texttt{answer\_a}, and \texttt{answer\_b}. Keep candidate answers fixed while varying only the judging prompt and answer order.
+
+\paragraph{Near-tie block.}
+Construct a curated near-tie dataset by editing strong answers for length, formatting, or mild phrasing changes while preserving semantic content. Every example should be manually checked to ensure that multiple verdicts remain plausible.
+
+\subsection{Prompt protocol}
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item Use the MT-Bench pairwise prompt as the baseline condition.
+  \item Add a tie-aware judge-aware prompt that explicitly instructs the judge not to reward verbosity and to return \texttt{[[C]]} when the answers are substantively indistinguishable.
+  \item Run each pair in both original and swapped answer order.
+  \item For reasoning-heavy subsets, keep a reference-based prompt variant available even if the main benchmark does not assume ground truth.
+\end{enumerate}
+
+\subsection{Judge-panel protocol}
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item Start with one free-tier judge configuration for low-cost iteration.
+  \item Add at least one additional judge model when panel evaluation begins.
+  \item Keep prompts, candidate answers, and default temperature fixed across judges.
+  \item Estimate both pooled rankings and judge-specific disagreement patterns from the same comparison set.
+\end{enumerate}
+
+\subsection{Caching, retries, and parse safety}
+
+Every request must be hashed from the exact provider name, model, prompt template, messages, and sampling parameters. Identical requests should hit the SQLite cache instead of the API. Transient failures should be retried with bounded exponential backoff, while configuration failures such as missing API keys should fail immediately and be written as explicit error records. Parse failures are not to be dropped; the raw response text must be retained for later analysis.
+
+\subsection{Expected run artifacts}
+
+Each experiment should emit:
+\begin{itemize}[leftmargin=1.5em]
+  \item \texttt{records.jsonl}, one row per request with parsed verdict and raw response;
+  \item \texttt{summary.json}, machine-readable counts and metadata;
+  \item \texttt{summary.md}, a short human-readable summary table.
+\end{itemize}
+These artifacts are the minimal record needed for reproducibility and later paper tables.
+
+\subsection{Example command sequence}
+
+\begin{verbatim}
+python -m ranking_judge run \
+  --provider configs/providers/openrouter_free.json \
+  --experiment configs/experiments/mtbench_pairwise.json
+
+python -m ranking_judge run \
+  --provider configs/providers/gemini_free.json \
+  --experiment configs/experiments/prompt_sensitivity.json
+
+python -m ranking_judge run \
+  --provider configs/providers/openrouter_free.json \
+  --provider configs/providers/openai_compatible_paid.example.json \
+  --experiment configs/experiments/panel_judging.json
+\end{verbatim}
+
+For a paper-ready empirical version, the final appendix should also record the exact model identifiers, prompt text revisions, date ranges of API usage, and any manually curated exclusions from the near-tie benchmark.
+
+\clearpage
+\putbib[references]
+\end{bibunit}
+\end{document}

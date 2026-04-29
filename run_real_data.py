@@ -502,7 +502,7 @@ def serialize_method_result(fit_result, test_records, item_names):
 
 
 
-def plot_proposed_uvt_heatmap(dataset_name, judge_names, item_names, fit, output_dir=None):
+def plot_proposed_uvt_heatmap(dataset_name, judge_names, item_names, fit, output_dir=None, sort_rows=True, sort_cols=True):
     U = np.asarray(fit["U"], dtype=float)
     V = np.asarray(fit["V"], dtype=float)
     heatmap_dir = output_dir if output_dir is not None else ensure_proposed_heatmap_dir()
@@ -513,6 +513,24 @@ def plot_proposed_uvt_heatmap(dataset_name, judge_names, item_names, fit, output
     else:
         heterogeneity = U @ V.T
 
+    # Sort rows / columns by their own mean heterogeneity (warm → top-left)
+    item_order = list(range(len(item_names)))
+    judge_order = list(range(len(judge_names)))
+    item_labels = list(item_names)
+    judge_labels = list(judge_names)
+
+    if sort_cols and heterogeneity.size > 0:
+        col_means = heterogeneity.mean(axis=0)
+        item_order = sorted(range(len(item_names)), key=lambda idx: float(col_means[idx]), reverse=True)
+        item_labels = [item_names[idx] for idx in item_order]
+        heterogeneity = heterogeneity[:, item_order]
+
+    if sort_rows and heterogeneity.size > 0:
+        row_means = heterogeneity.mean(axis=1)
+        judge_order = sorted(range(len(judge_names)), key=lambda idx: float(row_means[idx]), reverse=True)
+        judge_labels = [judge_names[idx] for idx in judge_order]
+        heterogeneity = heterogeneity[judge_order, :]
+
     absmax = float(np.max(np.abs(heterogeneity))) if heterogeneity.size else 0.0
     if absmax <= 0.0:
         absmax = 1.0
@@ -520,8 +538,8 @@ def plot_proposed_uvt_heatmap(dataset_name, judge_names, item_names, fit, output
     plt.figure(figsize=(max(8, 0.35 * len(item_names)), max(4, 0.35 * len(judge_names))))
     plt.imshow(heterogeneity, aspect="auto", cmap="coolwarm", vmin=-absmax, vmax=absmax)
     plt.colorbar(label="U @ V.T")
-    plt.xticks(np.arange(len(item_names)), item_names, rotation=90, fontsize=7)
-    plt.yticks(np.arange(len(judge_names)), judge_names, fontsize=8)
+    plt.xticks(np.arange(len(item_labels)), item_labels, rotation=90, fontsize=7)
+    plt.yticks(np.arange(len(judge_labels)), judge_labels, fontsize=8)
     plt.xlabel("Items")
     plt.ylabel("Judges")
     plt.title(f"{dataset_name} Proposed heterogeneity heatmap (U @ V.T)")

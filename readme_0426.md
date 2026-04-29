@@ -1,6 +1,6 @@
 # real_data README (2026-04-26)
 
-今日两项修改。
+今日三项修改。
 
 ---
 
@@ -15,7 +15,7 @@ Leave-One-Family-Out 实验中，zai-org 家族在 chatbot_arena / mtbench / ult
 - `run_real_data.py`
   - 新增 `run_stability_excluding_judge(...)`：过滤指定 judge 后跑完整 stability 流程（train/test split → CV 选 rank → fit 三种方法 → heatmap）
   - 新增 `ensure_stability_excluding_dir()` / `ensure_stability_excluding_heatmap_dir()`
-  - 修改 `plot_proposed_uvt_heatmap(...)`：增加可选 `output_dir=None` 参数
+  - 修改 `plot_proposed_uvt_heatmap(...)`：增加可选 `output_dir=None`、`sort_rows=True`、`sort_cols=True` 参数，行列按 `U @ V.T` 自身均值降序排列（暖色聚左上）
   - 修改 `plot_real_data_accuracy(...)`：增加可选 `output_path=None`、`title_suffix=None` 参数
   - CLI 新增 `--experiment stability_excluding_zai_org`
 
@@ -83,3 +83,19 @@ results/
 ├── in_house_mu_ci_table.csv
 └── in_house_mu_ci_summary.json
 ```
+
+---
+
+## 3. Heatmap 行列排序
+
+### 代码改动
+
+- `run_real_data.py`
+  - `plot_proposed_uvt_heatmap(...)`：新增可选参数 `sort_rows=True`、`sort_cols=True`
+    - 列按 `U @ V.T` 列均值降序 → 正 heterogeneity 高的 item 靠左
+    - 行按 `U @ V.T` 行均值降序 → 正 heterogeneity 高的 judge 靠上
+    - 不影响原有调用（默认开启），可通过 `sort_rows=False` / `sort_cols=False` 关闭
+
+### 影响范围
+
+主 stability 和 stability_excluding_zai_org 的 8 张 heatmap 均已按新规则重新生成。

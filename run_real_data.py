@@ -2,6 +2,7 @@ import argparse
 import json
 import multiprocessing as mp
 import os
+import statistics
 import time
 import numpy as np
 import matplotlib.pyplot as plt
@@ -45,6 +46,29 @@ REAL_DATA_FILES = {
 NOISY_JUDGE_COUNTS = list(range(1, 11))
 STRUCTURED_BIAS_VARIANTS = ("anti_consensus", "family_bias", "cluster_bias")
 STRUCTURED_BIAS_UNITS = ("all_records", "question_pair", "matched_judge")
+DEFAULT_SEED_SWEEP_SEEDS = [
+    11,
+    17,
+    23,
+    29,
+    31,
+    37,
+    41,
+    42,
+    43,
+    47,
+    53,
+    59,
+    61,
+    67,
+    71,
+    73,
+    79,
+    83,
+    89,
+    97,
+]
+DEFAULT_BOOTSTRAP_SWEEP_SEEDS = DEFAULT_SEED_SWEEP_SEEDS[:5]
 
 
 
@@ -67,6 +91,12 @@ def select_noisy_judge_counts(max_noisy_step=None):
 
 def ensure_results_dir():
     results_dir = os.path.join(os.path.dirname(__file__), "results")
+    os.makedirs(results_dir, exist_ok=True)
+    return results_dir
+
+
+def ensure_seed_sweep_dir():
+    results_dir = os.path.join(ensure_results_dir(), "seed_sweeps")
     os.makedirs(results_dir, exist_ok=True)
     return results_dir
 
@@ -285,7 +315,7 @@ def fit_all_methods_safe(
     y_ijk,
     tau=30.0,
     skipped_methods=None,
-    max_iter=500,
+    max_iter=2000,
     proposed_max_steps=40,
     proposed_tol=5e-5,
     proposed_inner_maxiter=500,
@@ -307,7 +337,7 @@ def fit_all_methods_safe(
                 inner_maxiter=proposed_inner_maxiter,
             ),
         ),
-        ("zhou_github", lambda: fit_zhou_github(N, K, n_ijk, y_ijk,max_iter=max_iter)),
+        ("zhou_github", lambda: fit_zhou_github(N, K, n_ijk, y_ijk, max_iter=max_iter)),
         ("standard_btl", lambda: fit_standard_btl(N, K, n_ijk, y_ijk)),
     ):
         skip_reason = skipped_methods.get(method_name)
@@ -685,7 +715,7 @@ def summarize_rank_shift(reference_serialized, current_serialized):
 def fit_methods_for_records(
     records,
     proposed_rank,
-    max_iter=100,
+    max_iter=2000,
     proposed_max_steps=120,
     tau=40.0,
     proposed_inner_maxiter=500,
@@ -822,7 +852,7 @@ def run_real_data_stability_experiment(test_ratio=0.2, random_seed=42, dataset_n
             random_seed=random_seed,
         )
         n_ijk, y_ijk = processed_records_to_aggregated(train_records, N, K)
-        fit_results = fit_all_methods_safe(N, K, r_model, n_ijk, y_ijk, max_iter=100)
+        fit_results = fit_all_methods_safe(N, K, r_model, n_ijk, y_ijk, max_iter=2000)
         method_summary = {
             method_name: serialize_method_result(fit_result, test_records, dataset["item_names"])
             for method_name, fit_result in fit_results.items()
@@ -1253,9 +1283,9 @@ def run_real_data_bootstrap_experiment(
     return bootstrap_summary
 
 
-def run_real_data_noisy_judge_experiment(random_seed=42, dataset_name=None, max_noisy_step=None):
+def run_real_data_noisy_judge_experiment(random_seed=42, dataset_name=None, max_noisy_step=None, save_artifacts=True):
     noisy_summary = {}
-    noisy_dataset_dir = ensure_noisy_dataset_dir()
+    noisy_dataset_dir = ensure_noisy_dataset_dir() if save_artifacts else None
     noisy_judge_counts = select_noisy_judge_counts(max_noisy_step)
     for dataset_name, dataset_path in select_real_data_files(dataset_name).items():
         print(f"[dataset={dataset_name}] loading base dataset", flush=True)
@@ -1273,7 +1303,7 @@ def run_real_data_noisy_judge_experiment(random_seed=42, dataset_name=None, max_
         )
         base_n_ijk, base_y_ijk = processed_records_to_aggregated(base_dataset["processed"], N, base_K)
         print(f"[dataset={dataset_name}] fitting base methods", flush=True)
-        base_fit_results = fit_all_methods_safe(N, base_K, r_model, base_n_ijk, base_y_ijk, max_iter=100)
+        base_fit_results = fit_all_methods_safe(N, base_K, r_model, base_n_ijk, base_y_ijk, max_iter=2000)
         base_method_summary = {
             method_name: serialize_method_result(fit_result, [], base_dataset["item_names"])
             for method_name, fit_result in base_fit_results.items()
@@ -1290,7 +1320,8 @@ def run_real_data_noisy_judge_experiment(random_seed=42, dataset_name=None, max_
             "base_methods": base_method_summary,
             "steps": dataset_steps,
         }
-        write_noisy_summary(noisy_summary, dataset_name=dataset_name)
+        if save_artifacts:
+            write_noisy_summary(noisy_summary, dataset_name=dataset_name)
 
         augmented_records = list(base_dataset["records"])
         skipped_methods = {}
@@ -1304,9 +1335,11 @@ def run_real_data_noisy_judge_experiment(random_seed=42, dataset_name=None, max_
                     random_seed=random_seed + step,
                 )
             )
-            save_path = os.path.join(noisy_dataset_dir, f"{dataset_name}_plus_{step}_noisy_judges.json")
-            with open(save_path, "w", encoding="utf-8") as f:
-                json.dump(augmented_records, f, indent=2)
+            save_path = None
+            if save_artifacts:
+                save_path = os.path.join(noisy_dataset_dir, f"{dataset_name}_plus_{step}_noisy_judges.json")
+                with open(save_path, "w", encoding="utf-8") as f:
+                    json.dump(augmented_records, f, indent=2)
 
             augmented_dataset = build_real_dataset_from_records(augmented_records)
             K_aug = len(augmented_dataset["judge_names"])
@@ -1315,7 +1348,7 @@ def run_real_data_noisy_judge_experiment(random_seed=42, dataset_name=None, max_
                 flush=True,
             )
             n_ijk, y_ijk = processed_records_to_aggregated(augmented_dataset["processed"], N, K_aug)
-            fit_results = fit_all_methods_safe(N, K_aug, r_model, n_ijk, y_ijk, skipped_methods=skipped_methods, max_iter=100)
+            fit_results = fit_all_methods_safe(N, K_aug, r_model, n_ijk, y_ijk, skipped_methods=skipped_methods, max_iter=2000)
 
             method_summary = {}
             for method_name, fit_result in fit_results.items():
@@ -1348,14 +1381,17 @@ def run_real_data_noisy_judge_experiment(random_seed=42, dataset_name=None, max_
                     "methods": method_summary,
                 }
             )
-            write_noisy_summary(noisy_summary, dataset_name=dataset_name)
+            if save_artifacts:
+                write_noisy_summary(noisy_summary, dataset_name=dataset_name)
             print(f"[dataset={dataset_name}] step {step} done in {step_elapsed:.2f}s", flush=True)
 
-        plot_noisy_rank_shift(noisy_summary)
+        if save_artifacts:
+            plot_noisy_rank_shift(noisy_summary)
         dataset_elapsed = time.perf_counter() - dataset_start_time
         print(f"[dataset={dataset_name}] dataset done in {dataset_elapsed:.2f}s", flush=True)
 
-    plot_noisy_rank_shift(noisy_summary)
+    if save_artifacts:
+        plot_noisy_rank_shift(noisy_summary)
     return noisy_summary
 
 
@@ -1400,7 +1436,7 @@ def run_structured_bias_injection_experiment(
         )
         base_n_ijk, base_y_ijk = processed_records_to_aggregated(base_dataset["processed"], N, K)
         print(f"[dataset={current_dataset_name}] fitting base methods", flush=True)
-        base_fit_results = fit_all_methods_safe(N, K, r_model, base_n_ijk, base_y_ijk, max_iter=100)
+        base_fit_results = fit_all_methods_safe(N, K, r_model, base_n_ijk, base_y_ijk, max_iter=2000)
         base_methods = {
             method_name: serialize_method_result(fit_result, [], base_dataset["item_names"])
             for method_name, fit_result in base_fit_results.items()
@@ -1447,7 +1483,7 @@ def run_structured_bias_injection_experiment(
             augmented_dataset, rank_for_fit, method_summary = fit_methods_for_records(
                 augmented_records,
                 rank_for_refit,
-                max_iter=100,
+                max_iter=2000,
                 proposed_max_steps=300,
                 proposed_inner_maxiter=2000,
             )
@@ -1514,7 +1550,7 @@ def run_leave_one_family_out_experiment(random_seed=42, dataset_name=None, min_f
         )
         base_n_ijk, base_y_ijk = processed_records_to_aggregated(base_dataset["processed"], N, K)
         print(f"[dataset={current_dataset_name}] fitting base methods", flush=True)
-        base_fit_results = fit_all_methods_safe(N, K, r_model, base_n_ijk, base_y_ijk, max_iter=100)
+        base_fit_results = fit_all_methods_safe(N, K, r_model, base_n_ijk, base_y_ijk, max_iter=2000)
         base_methods = {
             method_name: serialize_method_result(fit_result, [], base_dataset["item_names"])
             for method_name, fit_result in base_fit_results.items()
@@ -1540,7 +1576,7 @@ def run_leave_one_family_out_experiment(random_seed=42, dataset_name=None, min_f
             ablated_dataset, rank_for_fit, method_summary = fit_methods_for_records(
                 retained_records,
                 r_model,
-                max_iter=100,
+                max_iter=2000,
             )
             for method_name, serialized in method_summary.items():
                 serialized["rank_shift"] = summarize_rank_shift(base_methods[method_name], serialized)
@@ -1659,7 +1695,7 @@ def run_real_near_tie_slice_experiment(
             random_seed=random_seed,
         )
         n_ijk, y_ijk = processed_records_to_aggregated(train_records, N, K)
-        fit_results = fit_all_methods_safe(N, K, r_model, n_ijk, y_ijk, max_iter=100)
+        fit_results = fit_all_methods_safe(N, K, r_model, n_ijk, y_ijk, max_iter=2000)
 
         method_summary = {}
         for method_name, fit_result in fit_results.items():
@@ -1705,6 +1741,341 @@ def run_real_near_tie_slice_experiment(
     return summary
 
 
+def parse_seed_list(seed_text, default_seeds=None):
+    if seed_text is None:
+        return list(DEFAULT_SEED_SWEEP_SEEDS if default_seeds is None else default_seeds)
+    seeds = [int(part.strip()) for part in seed_text.split(",") if part.strip()]
+    if not seeds:
+        raise ValueError("at least one seed is required")
+    return seeds
+
+
+def mean_std(values):
+    clean = [float(value) for value in values if value is not None]
+    if not clean:
+        return {"n": 0, "mean": None, "std": None, "stderr": None, "min": None, "max": None}
+    std = statistics.stdev(clean) if len(clean) > 1 else 0.0
+    return {
+        "n": len(clean),
+        "mean": statistics.fmean(clean),
+        "std": std,
+        "stderr": std / (len(clean) ** 0.5),
+        "min": min(clean),
+        "max": max(clean),
+    }
+
+
+def write_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+def load_existing_seed_raw(output_dir, experiment, seed):
+    path = os.path.join(output_dir, f"{experiment}_seed_{int(seed)}.json")
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_seed_raw(output_dir, experiment, seed, summary):
+    path = os.path.join(output_dir, f"{experiment}_seed_{int(seed)}.json")
+    write_json(path, summary)
+    return path
+
+
+def iter_seed_sweep_dataset_names(raw_by_seed):
+    names = set()
+    for summary in raw_by_seed.values():
+        for dataset, dataset_summary in summary.items():
+            if dataset.startswith("_") or not isinstance(dataset_summary, dict):
+                continue
+            if "methods" in dataset_summary or "base_methods" in dataset_summary:
+                names.add(dataset)
+    return sorted(names)
+
+
+def aggregate_seed_sweep_stability(raw_by_seed):
+    out = {}
+    for dataset in iter_seed_sweep_dataset_names(raw_by_seed):
+        method_names = sorted({
+            method
+            for summary in raw_by_seed.values()
+            if dataset in summary
+            for method in summary[dataset].get("methods", {})
+        })
+        out[dataset] = {
+            "train_size": next((summary[dataset].get("train_size") for summary in raw_by_seed.values() if dataset in summary), None),
+            "test_size": next((summary[dataset].get("test_size") for summary in raw_by_seed.values() if dataset in summary), None),
+            "methods": {},
+            "selected_ranks": [
+                summary[dataset].get("rank_selection", {}).get("selected_rank")
+                for summary in raw_by_seed.values()
+                if dataset in summary
+            ],
+        }
+        for method in method_names:
+            values = [
+                summary[dataset].get("methods", {}).get(method, {}).get("test_accuracy")
+                for summary in raw_by_seed.values()
+                if dataset in summary
+            ]
+            out[dataset]["methods"][method] = {"test_accuracy": mean_std(values)}
+    return out
+
+
+def aggregate_seed_sweep_near_tie(raw_by_seed):
+    metric_keys = (
+        "near_tie_log_loss",
+        "other_log_loss",
+        "near_tie_accuracy_no_ties",
+        "other_accuracy_no_ties",
+    )
+    out = {}
+    for dataset in iter_seed_sweep_dataset_names(raw_by_seed):
+        method_names = sorted({
+            method
+            for summary in raw_by_seed.values()
+            if dataset in summary
+            for method in summary[dataset].get("methods", {})
+        })
+        out[dataset] = {
+            "near_tie_test_size": mean_std([
+                summary[dataset].get("near_tie_test_size")
+                for summary in raw_by_seed.values()
+                if dataset in summary
+            ]),
+            "other_test_size": mean_std([
+                summary[dataset].get("other_test_size")
+                for summary in raw_by_seed.values()
+                if dataset in summary
+            ]),
+            "methods": {},
+            "selected_ranks": [
+                summary[dataset].get("rank_selection", {}).get("selected_rank")
+                for summary in raw_by_seed.values()
+                if dataset in summary
+            ],
+        }
+        for method in method_names:
+            method_out = {
+                "test_accuracy": mean_std([
+                    summary[dataset].get("methods", {}).get(method, {}).get("test_accuracy")
+                    for summary in raw_by_seed.values()
+                    if dataset in summary
+                ])
+            }
+            for key in metric_keys:
+                method_out[key] = mean_std([
+                    (summary[dataset].get("methods", {}).get(method, {}).get("slice_metrics") or {}).get(key)
+                    for summary in raw_by_seed.values()
+                    if dataset in summary
+                ])
+            out[dataset]["methods"][method] = method_out
+    return out
+
+
+def exact_rank_match_rate(rank_shift):
+    item_rank_shifts = (rank_shift or {}).get("rank_shift", {})
+    if not item_rank_shifts:
+        return None
+    return sum(1 for item_shift in item_rank_shifts.values() if item_shift == 0) / len(item_rank_shifts)
+
+
+def aggregate_seed_sweep_robustness(raw_by_seed):
+    out = {}
+    for dataset in iter_seed_sweep_dataset_names(raw_by_seed):
+        method_names = sorted({
+            method
+            for summary in raw_by_seed.values()
+            if dataset in summary
+            for step in summary[dataset].get("steps", [])
+            for method in step.get("methods", {})
+        })
+        step_values = sorted({
+            int(step.get("step"))
+            for summary in raw_by_seed.values()
+            if dataset in summary
+            for step in summary[dataset].get("steps", [])
+            if step.get("step") is not None
+        })
+        out[dataset] = {
+            "base_num_judges": next((summary[dataset].get("base_summary", {}).get("num_judges") for summary in raw_by_seed.values() if dataset in summary), None),
+            "steps": step_values,
+            "methods": {},
+            "selected_ranks": [
+                summary[dataset].get("rank_selection", {}).get("selected_rank")
+                for summary in raw_by_seed.values()
+                if dataset in summary
+            ],
+        }
+        for method in method_names:
+            method_out = {}
+            for step_value in step_values:
+                exact_values = []
+                spearman_values = []
+                top_1_values = []
+                for summary in raw_by_seed.values():
+                    dataset_summary = summary.get(dataset, {})
+                    step_summary = next(
+                        (step for step in dataset_summary.get("steps", []) if int(step.get("step")) == step_value),
+                        None,
+                    )
+                    if step_summary is None:
+                        continue
+                    method_result = step_summary.get("methods", {}).get(method, {})
+                    rank_shift = method_result.get("rank_shift")
+                    if rank_shift is None or method_result.get("error") is not None:
+                        continue
+                    exact_values.append(exact_rank_match_rate(rank_shift))
+                    spearman_values.append(rank_shift.get("spearman"))
+                    top_1_values.append(float(bool(rank_shift.get("top_1_changed"))))
+                method_out[str(step_value)] = {
+                    "exact_rank_match_rate": mean_std(exact_values),
+                    "spearman": mean_std(spearman_values),
+                    "top_1_changed_rate": mean_std(top_1_values),
+                }
+            out[dataset]["methods"][method] = method_out
+    return out
+
+
+def aggregate_seed_sweep_bootstrap(raw_by_seed):
+    out = {}
+    for dataset in iter_seed_sweep_dataset_names(raw_by_seed):
+        method_names = sorted({
+            method
+            for summary in raw_by_seed.values()
+            if dataset in summary
+            for method in summary[dataset].get("methods", {})
+        })
+        top_keys = sorted({
+            top_key
+            for summary in raw_by_seed.values()
+            if dataset in summary
+            for method in summary[dataset].get("methods", {}).values()
+            for top_key in (method.get("top_k_stability") or {})
+        })
+        out[dataset] = {
+            "bootstrap_samples": next((summary[dataset].get("bootstrap_samples") for summary in raw_by_seed.values() if dataset in summary), None),
+            "selected_ranks": [
+                summary[dataset].get("rank_selection", {}).get("selected_rank")
+                for summary in raw_by_seed.values()
+                if dataset in summary
+            ],
+            "methods": {},
+        }
+        for method in method_names:
+            method_out = {
+                "successful_samples": mean_std([
+                    summary[dataset].get("methods", {}).get(method, {}).get("successful_samples")
+                    for summary in raw_by_seed.values()
+                    if dataset in summary
+                ]),
+                "failed_samples": mean_std([
+                    summary[dataset].get("methods", {}).get(method, {}).get("failed_samples")
+                    for summary in raw_by_seed.values()
+                    if dataset in summary
+                ]),
+                "top_k": {},
+            }
+            for top_key in top_keys:
+                for metric in ("exact_match_rate_vs_baseline_top_k", "mean_jaccard_vs_baseline"):
+                    values = [
+                        ((summary[dataset].get("methods", {}).get(method, {}).get("top_k_stability") or {}).get(top_key) or {}).get(metric)
+                        for summary in raw_by_seed.values()
+                        if dataset in summary
+                    ]
+                    method_out["top_k"].setdefault(top_key, {})[metric] = mean_std(values)
+            out[dataset]["methods"][method] = method_out
+    return out
+
+
+def aggregate_seed_sweep_experiment(experiment, raw_by_seed):
+    if experiment == "stability":
+        return aggregate_seed_sweep_stability(raw_by_seed)
+    if experiment == "robustness":
+        return aggregate_seed_sweep_robustness(raw_by_seed)
+    if experiment == "near_tie_slice":
+        return aggregate_seed_sweep_near_tie(raw_by_seed)
+    if experiment == "bootstrap":
+        return aggregate_seed_sweep_bootstrap(raw_by_seed)
+    raise ValueError(f"seed sweep is not supported for experiment '{experiment}'")
+
+
+def run_one_seed_sweep_experiment(experiment, seed, args):
+    if experiment == "stability":
+        return run_real_data_stability_experiment(
+            dataset_name=args.dataset,
+            test_ratio=args.test_ratio,
+            random_seed=seed,
+        )
+    if experiment == "robustness":
+        return run_real_data_noisy_judge_experiment(
+            dataset_name=args.dataset,
+            max_noisy_step=args.max_noisy_step,
+            random_seed=seed,
+            save_artifacts=False,
+        )
+    if experiment == "near_tie_slice":
+        return run_real_near_tie_slice_experiment(
+            dataset_name=args.dataset,
+            test_ratio=args.test_ratio,
+            min_pair_records=args.near_tie_min_pair_records,
+            max_pairs=args.near_tie_max_pairs,
+            random_seed=seed,
+        )
+    if experiment == "bootstrap":
+        return run_real_data_bootstrap_experiment(
+            dataset_name=args.dataset,
+            bootstrap_samples=args.bootstrap_samples,
+            bootstrap_seed=seed,
+            bootstrap_workers=args.bootstrap_workers,
+        )
+    raise ValueError(f"seed sweep is not supported for experiment '{experiment}'")
+
+
+def run_real_data_seed_sweep(experiment, args, seeds=None):
+    output_dir = ensure_seed_sweep_dir()
+    raw_by_seed = {}
+    seeds = list(DEFAULT_SEED_SWEEP_SEEDS if seeds is None else seeds)
+    for seed in seeds:
+        existing = load_existing_seed_raw(output_dir, experiment, seed) if args.reuse else None
+        if existing is None:
+            start_time = time.perf_counter()
+            print(f"[seed-sweep] experiment={experiment} seed={seed} start", flush=True)
+            summary = run_one_seed_sweep_experiment(experiment, seed, args)
+            summary["_seed_sweep_metadata"] = {
+                "experiment": experiment,
+                "seed": int(seed),
+                "elapsed_seconds": time.perf_counter() - start_time,
+            }
+            save_seed_raw(output_dir, experiment, seed, summary)
+        else:
+            print(f"[seed-sweep] experiment={experiment} seed={seed} reusing raw JSON", flush=True)
+            summary = existing
+        raw_by_seed[int(seed)] = summary
+
+    aggregate = {
+        "experiment": experiment,
+        "seeds": [int(seed) for seed in seeds],
+        "dataset": args.dataset,
+        "summary": aggregate_seed_sweep_experiment(experiment, raw_by_seed),
+    }
+    output_path = os.path.join(output_dir, f"{experiment}_seed_sweep_summary.json")
+    write_json(output_path, aggregate)
+    print(f"[seed-sweep] wrote {output_path}", flush=True)
+    return aggregate
+
+
+def run_real_data_comparison_seed_sweeps(args):
+    seeds = parse_seed_list(args.seeds)
+    experiments = ("stability", "robustness", "near_tie_slice")
+    return {
+        experiment: run_real_data_seed_sweep(experiment, args, seeds=seeds)
+        for experiment in experiments
+    }
+
+
 
 def run_real_data_benchmarks(
     dataset_name=None,
@@ -1731,7 +2102,7 @@ def run_real_data_benchmarks(
     return {"stability": stability_summary, "noisy_judge": noisy_summary, "bootstrap": bootstrap_summary}
 
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--experiment",
@@ -1753,6 +2124,10 @@ if __name__ == "__main__":
     parser.add_argument("--bootstrap-seed", type=int, default=42)
     parser.add_argument("--bootstrap-workers", type=int, default=None)
     parser.add_argument("--random-seed", type=int, default=42)
+    parser.add_argument("--test-ratio", type=float, default=0.2)
+    parser.add_argument("--seeds", help="comma-separated seed list for repeated real-data comparisons; defaults to 20 seeds")
+    parser.add_argument("--reuse", action="store_true", help="reuse existing per-seed raw JSON in results/seed_sweeps when present")
+    parser.add_argument("--single-run", action="store_true", help="run only --random-seed for non-bootstrap comparison experiments")
     parser.add_argument("--min-family-judges", type=int, default=1)
     parser.add_argument("--near-tie-min-pair-records", type=int, default=20)
     parser.add_argument("--near-tie-max-pairs", type=int, default=20)
@@ -1760,8 +2135,15 @@ if __name__ == "__main__":
     parser.add_argument("--structured-bias-refit-cv", action="store_true")
     args = parser.parse_args()
 
-    if args.experiment == "stability":
-        run_real_data_stability_experiment(dataset_name=args.dataset, random_seed=args.random_seed)
+    repeated_comparison_experiments = {"stability", "robustness", "near_tie_slice"}
+    if args.experiment in repeated_comparison_experiments and not args.single_run:
+        run_real_data_seed_sweep(args.experiment, args, seeds=parse_seed_list(args.seeds))
+    elif args.experiment == "stability":
+        run_real_data_stability_experiment(
+            dataset_name=args.dataset,
+            test_ratio=args.test_ratio,
+            random_seed=args.random_seed,
+        )
     elif args.experiment == "robustness":
         run_real_data_noisy_judge_experiment(
             dataset_name=args.dataset,
@@ -1805,16 +2187,31 @@ if __name__ == "__main__":
     elif args.experiment == "near_tie_slice":
         run_real_near_tie_slice_experiment(
             dataset_name=args.dataset,
+            test_ratio=args.test_ratio,
             min_pair_records=args.near_tie_min_pair_records,
             max_pairs=args.near_tie_max_pairs,
             random_seed=args.random_seed,
         )
     else:
-        run_real_data_benchmarks(
-            dataset_name=args.dataset,
-            max_noisy_step=args.max_noisy_step,
-            bootstrap_samples=args.bootstrap_samples,
-            bootstrap_seed=args.bootstrap_seed,
-            bootstrap_workers=args.bootstrap_workers,
-            random_seed=args.random_seed,
-        )
+        if args.single_run:
+            run_real_data_benchmarks(
+                dataset_name=args.dataset,
+                max_noisy_step=args.max_noisy_step,
+                bootstrap_samples=args.bootstrap_samples,
+                bootstrap_seed=args.bootstrap_seed,
+                bootstrap_workers=args.bootstrap_workers,
+                random_seed=args.random_seed,
+            )
+        else:
+            run_real_data_comparison_seed_sweeps(args)
+            if args.bootstrap_samples > 0:
+                run_real_data_bootstrap_experiment(
+                    dataset_name=args.dataset,
+                    bootstrap_samples=args.bootstrap_samples,
+                    bootstrap_seed=args.bootstrap_seed,
+                    bootstrap_workers=args.bootstrap_workers,
+                )
+
+
+if __name__ == "__main__":
+    main()

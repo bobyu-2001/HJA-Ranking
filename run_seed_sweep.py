@@ -1,3 +1,11 @@
+from run_real_data import main as run_real_data_main
+
+
+if __name__ == "__main__":
+    run_real_data_main()
+    raise SystemExit
+
+
 import argparse
 import json
 import os

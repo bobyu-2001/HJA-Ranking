@@ -3,6 +3,7 @@ import json
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 from src.generate_simulation_data import (
     build_near_tie_parameters,
@@ -20,17 +21,23 @@ from src.models import select_rank_by_bic, uncertainty_quantification
 
 METHOD_LABELS = {
     "proposed": "Proposed",
-    "zhou_github": "Zhou github",
+    "zhou_github": "JA-Ranking",
     "standard_btl": "Standard BTL",
 }
 
 METHOD_COLORS = {
-    "proposed": "tab:blue",
-    "zhou_github": "tab:orange",
-    "standard_btl": "tab:green",
+    "proposed": "#0072B2",
+    "zhou_github": "#D55E00",
+    "standard_btl": "#009E73",
 }
 
 PRESENTATION_METRICS = ("mse", "spearman", "ndcg", "score_entry_coverage", "sign_accuracy")
+
+PRESENTATION_MARKERS = {
+    "proposed": "o",
+    "zhou_github": "s",
+    "standard_btl": "^",
+}
 
 
 
@@ -649,15 +656,47 @@ def presentation_series_from_conditions(conditions, x_key):
     return np.asarray(x_values, dtype=float), series
 
 
+def apply_presentation_plot_style():
+    plt.rcParams.update(
+        {
+            "font.family": "DejaVu Sans",
+            "font.size": 8.5,
+            "axes.titlesize": 9.5,
+            "axes.labelsize": 9,
+            "axes.linewidth": 0.8,
+            "xtick.labelsize": 8,
+            "ytick.labelsize": 8,
+            "legend.fontsize": 7.5,
+            "figure.titlesize": 10,
+            "savefig.bbox": "tight",
+            "savefig.pad_inches": 0.04,
+        }
+    )
+
+
+def polish_presentation_axis(ax):
+    ax.grid(True, color="#B0B0B0", linewidth=0.45, alpha=0.35)
+    ax.set_axisbelow(True)
+    ax.tick_params(axis="both", which="major", length=3, width=0.7)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    for spine in ("left", "bottom"):
+        ax.spines[spine].set_color("#333333")
+        ax.spines[spine].set_linewidth(0.8)
+
+
 def plot_metric_panel(ax, x_values, series, metric_name, x_label, y_label, title, ylim=None):
     for method_name in METHOD_LABELS:
         ax.errorbar(
             x_values,
             series[method_name][metric_name]["mean"],
             yerr=series[method_name][metric_name]["err"],
-            marker="o",
-            linewidth=1.6,
-            capsize=3,
+            marker=PRESENTATION_MARKERS[method_name],
+            markersize=4.6,
+            linewidth=1.8,
+            capsize=2.5,
+            capthick=0.9,
+            elinewidth=0.9,
             label=METHOD_LABELS[method_name],
             color=METHOD_COLORS[method_name],
         )
@@ -666,7 +705,7 @@ def plot_metric_panel(ax, x_values, series, metric_name, x_label, y_label, title
     ax.set_title(title)
     if ylim is not None:
         ax.set_ylim(*ylim)
-    ax.grid(True, alpha=0.3)
+    polish_presentation_axis(ax)
 
 
 def plot_ranking_panel(ax, x_values, series, x_label, title):
@@ -677,23 +716,29 @@ def plot_ranking_panel(ax, x_values, series, x_label, title):
             x_values,
             series[method_name]["spearman"]["mean"],
             yerr=series[method_name]["spearman"]["err"],
-            marker="o",
-            linewidth=1.6,
-            capsize=3,
+            marker=PRESENTATION_MARKERS[method_name],
+            markersize=4.6,
+            linewidth=1.8,
+            capsize=2.5,
+            capthick=0.9,
+            elinewidth=0.9,
             color=color,
             linestyle="-",
-            label=f"{METHOD_LABELS[method_name]} Spearman",
+            label=METHOD_LABELS[method_name],
         )
         right_ax.errorbar(
             x_values,
             series[method_name]["ndcg"]["mean"],
             yerr=series[method_name]["ndcg"]["err"],
-            marker="s",
-            linewidth=1.4,
-            capsize=3,
+            marker=PRESENTATION_MARKERS[method_name],
+            markersize=4.2,
+            linewidth=1.5,
+            capsize=2.5,
+            capthick=0.9,
+            elinewidth=0.9,
             color=color,
             linestyle="--",
-            label=f"{METHOD_LABELS[method_name]} NDCG",
+            label=METHOD_LABELS[method_name],
         )
     ax.set_xlabel(x_label)
     ax.set_ylabel("Spearman")
@@ -701,29 +746,33 @@ def plot_ranking_panel(ax, x_values, series, x_label, title):
     ax.set_title(title)
     ax.set_ylim(0.6, 1)
     right_ax.set_ylim(0.9, 1)
-    ax.grid(True, alpha=0.3)
+    polish_presentation_axis(ax)
+    right_ax.spines["top"].set_visible(False)
+    right_ax.spines["left"].set_visible(False)
+    right_ax.spines["right"].set_color("#333333")
+    right_ax.spines["right"].set_linewidth(0.8)
+    right_ax.tick_params(axis="y", which="major", length=3, width=0.7)
     return right_ax
 
 
 def plot_presentation_grid(summary, save_path, dgp):
+    apply_presentation_plot_style()
     if dgp == "ours":
-        fig, axes = plt.subplots(2, 4, figsize=(22, 9), squeeze=False)
+        fig, axes = plt.subplots(2, 4, figsize=(13.5, 6.0), squeeze=False)
         row_specs = [
-            ("ours_sample_size", "T", "Sample size (T)", "Ours DGP: sample size"),
-            ("ours_heterogeneity", "x_u_operator_norm", r"Heterogeneity $||U||_2$", "Ours DGP: heterogeneity"),
+            ("ours_sample_size", "T", "Sample size T", "Ours DGP, sample size"),
+            ("ours_heterogeneity", "heterogeneity_scale", "Heterogeneity scale", "Ours DGP, heterogeneity"),
         ]
     elif dgp == "zhou":
-        fig, axes = plt.subplots(1, 4, figsize=(22, 4.8), squeeze=False)
-        row_specs = [("zhou_sample_size", "T", "Sample size (T)", "Zhou DGP")]
+        fig, axes = plt.subplots(1, 4, figsize=(13.5, 3.1), squeeze=False)
+        row_specs = [("zhou_sample_size", "T", "Sample size T", "Zhou DGP")]
     else:
         raise ValueError(f"unknown plot DGP: {dgp}")
 
-    legend_handles = None
-    legend_labels = None
     for row_idx, (section_key, x_key, x_label, row_title) in enumerate(row_specs):
         x_values, series = presentation_series_from_conditions(summary[section_key], x_key)
         plot_metric_panel(axes[row_idx, 0], x_values, series, "mse", x_label, "MSE", f"{row_title}: MSE")
-        ranking_right_ax = plot_ranking_panel(axes[row_idx, 1], x_values, series, x_label, f"{row_title}: ranking")
+        plot_ranking_panel(axes[row_idx, 1], x_values, series, x_label, f"{row_title}: ranking")
         plot_metric_panel(
             axes[row_idx, 2],
             x_values,
@@ -731,10 +780,10 @@ def plot_presentation_grid(summary, save_path, dgp):
             "score_entry_coverage",
             x_label,
             "Coverage",
-            f"{row_title}: S entry coverage",
+            f"{row_title}: score coverage",
             ylim=(-0.05, 1.05),
         )
-        axes[row_idx, 2].axhline(0.95, color="black", linestyle="--", linewidth=1.0, alpha=0.7)
+        axes[row_idx, 2].axhline(0.95, color="#4D4D4D", linestyle="--", linewidth=0.9, alpha=0.8)
         plot_metric_panel(
             axes[row_idx, 3],
             x_values,
@@ -745,17 +794,42 @@ def plot_presentation_grid(summary, save_path, dgp):
             f"{row_title}: sign accuracy",
             ylim=(-0.05, 1.05),
         )
-        if legend_handles is None:
-            handles_left, labels_left = axes[row_idx, 1].get_legend_handles_labels()
-            handles_right, labels_right = ranking_right_ax.get_legend_handles_labels()
-            legend_handles = handles_left + handles_right
-            legend_labels = labels_left + labels_right
-
-    axes[0, 0].legend(loc="best", fontsize=8)
-    if legend_handles is not None:
-        axes[0, 1].legend(legend_handles, legend_labels, loc="best", fontsize=7)
-    fig.tight_layout()
-    fig.savefig(save_path, dpi=200)
+    method_handles = [
+        Line2D(
+            [0],
+            [0],
+            color=METHOD_COLORS[method_name],
+            marker=PRESENTATION_MARKERS[method_name],
+            linewidth=1.8,
+            markersize=4.6,
+            label=METHOD_LABELS[method_name],
+        )
+        for method_name in METHOD_LABELS
+    ]
+    metric_handles = [
+        Line2D([0], [0], color="#333333", linewidth=1.8, linestyle="-", label="Spearman"),
+        Line2D([0], [0], color="#333333", linewidth=1.8, linestyle="--", label="NDCG@N"),
+    ]
+    fig.legend(
+        handles=method_handles,
+        loc="upper center",
+        bbox_to_anchor=(0.42, 1.03),
+        ncol=len(method_handles),
+        frameon=False,
+        columnspacing=1.4,
+        handlelength=1.8,
+    )
+    fig.legend(
+        handles=metric_handles,
+        loc="upper center",
+        bbox_to_anchor=(0.78, 1.03),
+        ncol=len(metric_handles),
+        frameon=False,
+        columnspacing=1.2,
+        handlelength=1.8,
+    )
+    fig.tight_layout(w_pad=1.0, h_pad=1.5, rect=(0, 0, 1, 0.96))
+    fig.savefig(save_path, dpi=300)
     plt.close(fig)
     return save_path
 

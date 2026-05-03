@@ -307,6 +307,7 @@ def alternating_mle(
     tol=1e-5,
     tau=10.0,
     inner_maxiter=500,
+    reanchor_steps=True,
 ):
     # Algorithm 1 / proximal anchored alternating MLE:
     # initialize -> judge-side update -> item-side update -> ReAnchor ->
@@ -392,7 +393,10 @@ def alternating_mle(
         mu_tilde = item_basis @ result_i.x[:N - 1]
         V_tilde = item_basis @ result_i.x[N - 1:].reshape(N - 1, r)
 
-        gamma_new, mu_new, U_new, V_new = reanchor(gamma_tilde, mu_tilde, U_tilde, V_tilde)
+        if reanchor_steps:
+            gamma_new, mu_new, U_new, V_new = reanchor(gamma_tilde, mu_tilde, U_tilde, V_tilde)
+        else:
+            gamma_new, mu_new, U_new, V_new = gamma_tilde, mu_tilde, U_tilde, V_tilde
 
         nll = negative_log_likelihood(mu_new, gamma_new, U_new, V_new, n_ijk, y_ijk)
         prev_nll = negative_log_likelihood(mu, gamma, U, V, n_ijk, y_ijk)
@@ -408,7 +412,13 @@ def alternating_mle(
         '''
         gamma, mu, U, V = gamma_new, mu_new, U_new, V_new
         if rel_nll < tol:
-            return mu, gamma, U, V, {"n_iter": step_index, "converged": True, "history": history, "nll": float(nll)}
+            return mu, gamma, U, V, {
+                "n_iter": step_index,
+                "converged": True,
+                "history": history,
+                "nll": float(nll),
+                "reanchor_steps": bool(reanchor_steps),
+            }
 
     raise RuntimeError("alternating MLE failed to converge within max_steps")
 
@@ -456,7 +466,18 @@ def fit_rank0_model(N, K, n_ijk, y_ijk, maxiter=2000):
 
 
 
-def estimate_parameters(N, K, r, n_ijk, y_ijk, max_steps=120, tol=1e-5, tau=10.0, inner_maxiter=500):
+def estimate_parameters(
+    N,
+    K,
+    r,
+    n_ijk,
+    y_ijk,
+    max_steps=120,
+    tol=1e-5,
+    tau=10.0,
+    inner_maxiter=500,
+    reanchor_steps=True,
+):
     # Public estimator entry: dispatch to the rank-0 fit or Algorithm 1 depending
     # on whether the requested latent rank is zero.
     validate_rank(N, K, r)
@@ -472,6 +493,7 @@ def estimate_parameters(N, K, r, n_ijk, y_ijk, max_steps=120, tol=1e-5, tau=10.0
         tol=tol,
         tau=tau,
         inner_maxiter=inner_maxiter,
+        reanchor_steps=reanchor_steps,
     )
 
 
@@ -605,6 +627,26 @@ def _evaluate_uq_target(target, gamma, mu, U, V):
         value = mu[i] - mu[j]
         grad = consensus_contrast_gradient(gamma, mu, U, V, i, j)
         label = target.get("label", f"mu[{i}]-mu[{j}]")
+    elif target_type == "consensus_score":
+        i = int(target["i"])
+        N = mu.size
+        if not (0 <= i < N):
+            raise ValueError(f"invalid consensus score index {i} for N={N}")
+        value = mu[i]
+        slices = _param_slices(gamma.size, N, U.shape[1])
+        grad = np.zeros(slices["size"], dtype=float)
+        grad[slices["mu"].start + i] = 1.0
+        label = target.get("label", f"mu[{i}]")
+    elif target_type == "gamma":
+        k = int(target["k"])
+        K = gamma.size
+        if not (0 <= k < K):
+            raise ValueError(f"invalid gamma index {k} for K={K}")
+        value = gamma[k]
+        slices = _param_slices(K, mu.size, U.shape[1])
+        grad = np.zeros(slices["size"], dtype=float)
+        grad[slices["gamma"].start + k] = 1.0
+        label = target.get("label", f"gamma[{k}]")
     else:
         raise ValueError(f"unknown UQ target type: {target_type}")
     return label, float(value), grad

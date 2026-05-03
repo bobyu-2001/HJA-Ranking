@@ -199,7 +199,7 @@ def select_rank_by_cross_validation(
     candidate_ranks=None,
     max_steps=40,
     tol=5e-5,
-    tau=30.0,
+    tau=30.0, # or 5 for UltraFeedback (except in low noise settings) and 300 for in-house near-tie
 ):
     candidate_ranks = default_cv_candidate_ranks(N, K) if candidate_ranks is None else [int(r) for r in candidate_ranks]
     r_max = infer_full_model_rank(N, K)
@@ -315,7 +315,7 @@ def fit_all_methods_safe(
     y_ijk,
     tau=30.0,
     skipped_methods=None,
-    max_iter=2000,
+    max_iter=500,
     proposed_max_steps=40,
     proposed_tol=5e-5,
     proposed_inner_maxiter=500,
@@ -1303,7 +1303,7 @@ def run_real_data_noisy_judge_experiment(random_seed=42, dataset_name=None, max_
         )
         base_n_ijk, base_y_ijk = processed_records_to_aggregated(base_dataset["processed"], N, base_K)
         print(f"[dataset={dataset_name}] fitting base methods", flush=True)
-        base_fit_results = fit_all_methods_safe(N, base_K, r_model, base_n_ijk, base_y_ijk, max_iter=2000)
+        base_fit_results = fit_all_methods_safe(N, base_K, r_model, base_n_ijk, base_y_ijk)
         base_method_summary = {
             method_name: serialize_method_result(fit_result, [], base_dataset["item_names"])
             for method_name, fit_result in base_fit_results.items()
@@ -1348,7 +1348,7 @@ def run_real_data_noisy_judge_experiment(random_seed=42, dataset_name=None, max_
                 flush=True,
             )
             n_ijk, y_ijk = processed_records_to_aggregated(augmented_dataset["processed"], N, K_aug)
-            fit_results = fit_all_methods_safe(N, K_aug, r_model, n_ijk, y_ijk, skipped_methods=skipped_methods, max_iter=2000)
+            fit_results = fit_all_methods_safe(N, K_aug, r_model, n_ijk, y_ijk, skipped_methods=skipped_methods)
 
             method_summary = {}
             for method_name, fit_result in fit_results.items():

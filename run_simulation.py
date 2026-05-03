@@ -14,19 +14,28 @@ from src.generate_simulation_data import (
     generate_unbalanced_comparisons,
     identify_near_tie_pairs,
 )
-from src.benchmarks import fit_proposed, fit_standard_btl, fit_zhou_github
+from src.benchmarks import (
+    fit_direct_score_svd,
+    fit_proposed,
+    fit_proposed_no_reanchor,
+    fit_standard_btl,
+    fit_unstructured_btl_svd,
+    fit_zhou_github,
+)
 from src.evaluate import compute_near_tie_metrics, compute_parameter_errors, compute_ranking_metrics
 from src.models import select_rank_by_bic, uncertainty_quantification
 
 
 METHOD_LABELS = {
     "proposed": "Proposed",
+    "direct_score_svd": "Unstructured BTL + SVD",
     "zhou_github": "JA-Ranking",
     "standard_btl": "Standard BTL",
 }
 
 METHOD_COLORS = {
     "proposed": "#0072B2",
+    "direct_score_svd": "#CC79A7",
     "zhou_github": "#D55E00",
     "standard_btl": "#009E73",
 }
@@ -35,9 +44,34 @@ PRESENTATION_METRICS = ("mse", "spearman", "ndcg", "score_entry_coverage", "sign
 
 PRESENTATION_MARKERS = {
     "proposed": "o",
+    "direct_score_svd": "D",
     "zhou_github": "s",
     "standard_btl": "^",
 }
+
+PRESENTATION_COVERAGE_NOTES = {
+    "direct_score_svd": "Coverage is omitted for Unstructured BTL + SVD because the post-MLE truncated SVD is a nonsmooth projection with no simple delta-method interval formula here.",
+}
+
+ABLATION_METHOD_LABELS = {
+    "proposed": "Proposed",
+    "direct_score_svd": "Direct S + Truncated SVD",
+    "proposed_no_reanchor": "Proposed no ReAnchor",
+}
+
+ABLATION_METHOD_COLORS = {
+    "proposed": "#0072B2",
+    "direct_score_svd": "#CC79A7",
+    "proposed_no_reanchor": "#E69F00",
+}
+
+ABLATION_MARKERS = {
+    "proposed": "o",
+    "direct_score_svd": "D",
+    "proposed_no_reanchor": "X",
+}
+
+ABLATION_METRICS = ("mse", "spearman", "ndcg", "sign_accuracy")
 
 
 
@@ -64,6 +98,7 @@ def ensure_results_dir():
 def fit_all_methods(N, K, r_model, n_ijk, y_ijk, tau=30.0):
     return {
         "proposed": fit_proposed(N, K, r_model, n_ijk, y_ijk, max_steps=2000, tol=5e-5, tau=tau),
+        "direct_score_svd": fit_unstructured_btl_svd(N, K, r_model, n_ijk, y_ijk),
         "zhou_github": fit_zhou_github(N, K, n_ijk, y_ijk, max_iter=1000),
         "standard_btl": fit_standard_btl(N, K, n_ijk, y_ijk),
     }
@@ -73,8 +108,26 @@ def fit_all_methods_safe_simulation(N, K, r_model, n_ijk, y_ijk, tau=30.0):
     out = {}
     for method_name, fit_fn in (
         ("proposed", lambda: fit_proposed(N, K, r_model, n_ijk, y_ijk, max_steps=2000, tol=5e-5, tau=tau)),
-        ("zhou_github", lambda: fit_zhou_github(N, K, n_ijk, y_ijk, max_iter=1000)),
+        ("direct_score_svd", lambda: fit_unstructured_btl_svd(N, K, r_model, n_ijk, y_ijk)),
+        ("zhou_github", lambda: fit_zhou_github(N, K, n_ijk, y_ijk, max_iter=2000)),
         ("standard_btl", lambda: fit_standard_btl(N, K, n_ijk, y_ijk)),
+    ):
+        try:
+            out[method_name] = {"fit": fit_fn(), "error": None}
+        except Exception as exc:
+            out[method_name] = {"fit": None, "error": str(exc)}
+    return out
+
+
+def fit_ablation_methods_safe(N, K, r_model, n_ijk, y_ijk, tau=30.0):
+    out = {}
+    for method_name, fit_fn in (
+        ("proposed", lambda: fit_proposed(N, K, r_model, n_ijk, y_ijk, max_steps=2000, tol=5e-5, tau=tau)),
+        ("direct_score_svd", lambda: fit_direct_score_svd(N, K, r_model, n_ijk, y_ijk)),
+        (
+            "proposed_no_reanchor",
+            lambda: fit_proposed_no_reanchor(N, K, r_model, n_ijk, y_ijk, max_steps=2000, tol=5e-5, tau=tau),
+        ),
     ):
         try:
             out[method_name] = {"fit": fit_fn(), "error": None}
@@ -160,8 +213,143 @@ def run_convergence_experiment(N, K, r_true, T_list, n_repeats):
     }
 
 
+def summarize_likelihood_traces(traces):
+    max_len = max((len(trace["nll"]) for trace in traces), default=0)
+    summary = []
+    for idx in range(max_len):
+        values = np.asarray([trace["nll"][idx] for trace in traces if len(trace["nll"]) > idx], dtype=float)
+        if values.size == 0:
+            continue
+        std = float(np.std(values, ddof=1)) if values.size > 1 else 0.0
+        se = float(std / np.sqrt(values.size)) if values.size > 0 else 0.0
+        summary.append(
+            {
+                "iteration": int(idx + 1),
+                "n_success": int(values.size),
+                "mean": float(np.mean(values)),
+                "std": std,
+                "se": se,
+                "mc_ci95": float(1.96 * se),
+            }
+        )
+    return summary
 
-def run_bic_experiment(N, K, r_true, T_list, n_repeats):
+
+def get_likelihood_trace(summary, repetition_index=0):
+    traces = summary.get("traces", [])
+    if not traces:
+        raise ValueError("cannot plot likelihood convergence because no successful traces were recorded")
+    for trace in traces:
+        if trace.get("rep") == repetition_index:
+            return trace
+    if repetition_index == 0:
+        return traces[0]
+    raise ValueError(f"repetition {repetition_index} is not available in likelihood convergence summary")
+
+
+def plot_likelihood_convergence(summary, save_path, repetition_index=0):
+    apply_presentation_plot_style()
+    trace = get_likelihood_trace(summary, repetition_index=repetition_index)
+    nll = np.asarray(trace["nll"], dtype=float)
+    iterations = np.arange(1, nll.size + 1, dtype=float)
+
+    fig, ax = plt.subplots(figsize=(5.2, 3.4))
+    ax.plot(
+        iterations,
+        nll,
+        marker="o",
+        markersize=4.2,
+        linewidth=1.8,
+        color=METHOD_COLORS["proposed"],
+        label=METHOD_LABELS["proposed"],
+    )
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel("Negative log-likelihood")
+    ax.set_title(f"Proposed model convergence, rep {trace['rep']}")
+    ax.legend(frameon=False)
+    polish_presentation_axis(ax)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=300)
+    plt.close(fig)
+    return save_path
+
+
+def run_likelihood_convergence_experiment(
+    N=8,
+    K=4,
+    r_true=1,
+    T=800,
+    n_repeats=50,
+    dgp="ours",
+    heterogeneity_scale=1.0,
+    seed_offset=9000,
+    tau=30.0,
+    max_steps=2000,
+    tol=5e-5,
+):
+    traces = []
+    failures = []
+    for rep in range(n_repeats):
+        seed = int(seed_offset + 1000 * rep)
+        mu_true, gamma_true, U_true, V_true = make_presentation_parameters(
+            N,
+            K,
+            r_true,
+            random_seed=seed,
+            dgp=dgp,
+            heterogeneity_scale=heterogeneity_scale,
+        )
+        S_true = compute_score_matrix(mu_true, gamma_true, U_true, V_true)
+        comparisons = generate_balanced_comparisons(S_true, T, random_seed=seed + 1)
+        n_ijk, y_ijk = comparisons_to_aggregated(comparisons, N, K)
+
+        try:
+            fit = fit_proposed(N, K, r_true, n_ijk, y_ijk, max_steps=max_steps, tol=tol, tau=tau)
+        except Exception as exc:
+            failures.append({"rep": int(rep), "seed": seed, "error": str(exc)})
+            continue
+
+        history = fit["fit_info"].get("history", [])
+        traces.append(
+            {
+                "rep": int(rep),
+                "seed": seed,
+                "n_iter": int(fit["fit_info"]["n_iter"]),
+                "converged": bool(fit["fit_info"]["converged"]),
+                "nll": [float(row["nll"]) for row in history],
+                "rel_nll": [float(row["rel_nll"]) for row in history],
+            }
+        )
+
+    summary = {
+        "N": int(N),
+        "K": int(K),
+        "r_true": int(r_true),
+        "T": int(T),
+        "n_repeats": int(n_repeats),
+        "dgp": dgp,
+        "heterogeneity_scale": float(heterogeneity_scale),
+        "tau": float(tau),
+        "max_steps": int(max_steps),
+        "tol": float(tol),
+        "traces": traces,
+        "summary": summarize_likelihood_traces(traces),
+        "failures": failures,
+    }
+
+    results_dir = ensure_results_dir()
+    plot_path = os.path.join(results_dir, f"convergence_likelihood_T{int(T)}_{dgp}.png")
+    summary_path = os.path.join(results_dir, f"convergence_likelihood_T{int(T)}_{dgp}.json")
+    plot_likelihood_convergence(summary, plot_path)
+    summary["figure"] = plot_path
+    summary["summary_path"] = summary_path
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(to_jsonable(summary), f, indent=2)
+    return summary
+
+
+
+def run_bic_experiment(N, K, r_true, T_list, n_repeats=500):
     probabilities = []
     proposed_gamma_by_T = {}
 
@@ -173,32 +361,53 @@ def run_bic_experiment(N, K, r_true, T_list, n_repeats):
 
             mu_true, gamma_true, U_true, V_true = generate_true_parameters(N, K, r_true, random_seed=seed)
             S_true = compute_score_matrix(mu_true, gamma_true, U_true, V_true)
-            comparisons = generate_balanced_comparisons(S_true, T, random_seed=seed + 1)
+            comparisons = generate_balanced_comparisons(S_true, T, random_seed=seed + 2)
             n_ijk, y_ijk = comparisons_to_aggregated(comparisons, N, K)
 
             best_rank, _ = select_rank_by_bic(N, K, n_ijk, y_ijk, candidate_ranks=[0, r_true], max_steps=2000, tol=5e-5)
             hits.append(int(best_rank == r_true))
 
-            fit = fit_proposed(N, K, r_true, n_ijk, y_ijk, max_steps=2000, tol=5e-5, tau=30.0)
+            fit = fit_proposed(N, K, r_true, n_ijk, y_ijk, max_steps=2000, tol=5e-5, tau=5.0)
             gamma_runs.append({"rep": rep, "seed": seed, "best_rank": int(best_rank), "gamma": fit["gamma"]})
 
         probabilities.append(float(np.mean(hits)))
         proposed_gamma_by_T[str(T)] = gamma_runs
 
-    save_path = os.path.join(ensure_results_dir(), "bic_rank_recovery.png")
-    plt.figure(figsize=(7, 5))
-    plt.plot(T_list, probabilities, marker="o")
-    plt.xlabel("Sample Size (T)")
-    plt.ylabel("P(BIC selects true rank)")
-    plt.title("BIC rank recovery")
-    plt.ylim(-0.05, 1.05)
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=150)
-    plt.close()
+    # Professional seaborn-style plotting
+    apply_presentation_plot_style()
+    fig, ax = plt.subplots(figsize=(6.5, 4.5))
+    
+    ax.plot(
+        T_list,
+        probabilities,
+        marker="o",
+        markersize=6.5,
+        linewidth=2.2,
+        color=METHOD_COLORS["proposed"],
+        label="P(BIC selects true rank)",
+    )
+    
+    # Add reference line at 95% probability
+    #ax.axhline(0.95, color="#4D4D4D", linestyle="--", linewidth=1.0, alpha=0.7, label="95% nominal")
+    
+    ax.set_xlabel("Sample Size", fontsize=11.5)
+    ax.set_ylabel("Selection Probability", fontsize=11.5)
+    ax.set_title("BIC Rank Recovery", fontsize=13.0, color="#222222", pad=8)
+    ax.set_ylim(-0.05, 1.05)
+    
+    polish_presentation_axis(ax)
+    ax.legend(frameon=False, fontsize=10.0, loc="lower right")
+    
+    fig.tight_layout()
+    
+    save_path = os.path.join(ensure_results_dir(), "bic_rank_recovery.pdf")
+    fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    
     return {
         "probability_by_T": probabilities,
         "proposed_gamma_by_T": proposed_gamma_by_T,
+        "figure_path": save_path,
     }
 
 
@@ -516,12 +725,26 @@ def compute_score_entry_coverage(S_true, ci_matrix):
 
 def compute_presentation_metrics(mu_true, S_true, method_name, fit, n_ijk, alpha=0.05):
     ranking_metrics = compute_ranking_metrics(mu_true, fit["mu"])
-    ci_matrix = get_score_entry_ci_matrix(method_name, fit, n_ijk, alpha=alpha)
+    if method_name in PRESENTATION_COVERAGE_NOTES:
+        score_entry_coverage = np.nan
+    else:
+        ci_matrix = get_score_entry_ci_matrix(method_name, fit, n_ijk, alpha=alpha)
+        score_entry_coverage = compute_score_entry_coverage(S_true, ci_matrix)
     return {
         "mse": compute_score_mse(S_true, fit["S"]),
         "spearman": float(ranking_metrics["spearman"]),
         "ndcg": compute_ndcg_at_n(mu_true, fit["mu"]),
-        "score_entry_coverage": compute_score_entry_coverage(S_true, ci_matrix),
+        "score_entry_coverage": score_entry_coverage,
+        "sign_accuracy": compute_score_sign_accuracy(S_true, fit["S"]),
+    }
+
+
+def compute_ablation_metrics(mu_true, S_true, fit):
+    ranking_metrics = compute_ranking_metrics(mu_true, fit["mu"])
+    return {
+        "mse": compute_score_mse(S_true, fit["S"]),
+        "spearman": float(ranking_metrics["spearman"]),
+        "ndcg": compute_ndcg_at_n(mu_true, fit["mu"]),
         "sign_accuracy": compute_score_sign_accuracy(S_true, fit["S"]),
     }
 
@@ -547,6 +770,42 @@ def summarize_metric_records(records):
     for method_name in METHOD_LABELS:
         summary[method_name] = {}
         for metric_name in PRESENTATION_METRICS:
+            values = np.asarray(
+                [
+                    record["metrics"][method_name][metric_name]
+                    for record in records
+                    if method_name in record["metrics"]
+                    and metric_name in record["metrics"][method_name]
+                    and np.isfinite(record["metrics"][method_name][metric_name])
+                ],
+                dtype=float,
+            )
+            if values.size == 0:
+                summary[method_name][metric_name] = {
+                    "n_success": 0,
+                    "mean": None,
+                    "std": None,
+                    "se": None,
+                    "mc_ci95": None,
+                }
+                continue
+            std = float(np.std(values, ddof=1)) if values.size > 1 else 0.0
+            se = float(std / np.sqrt(values.size)) if values.size > 0 else None
+            summary[method_name][metric_name] = {
+                "n_success": int(values.size),
+                "mean": float(np.mean(values)),
+                "std": std,
+                "se": se,
+                "mc_ci95": float(1.96 * se),
+            }
+    return summary
+
+
+def summarize_records_for_methods(records, method_names, metric_names):
+    summary = {}
+    for method_name in method_names:
+        summary[method_name] = {}
+        for metric_name in metric_names:
             values = np.asarray(
                 [
                     record["metrics"][method_name][metric_name]
@@ -642,6 +901,61 @@ def run_presentation_condition(
     }
 
 
+def run_ablation_condition(
+    N,
+    K,
+    r_true,
+    T,
+    n_repeats,
+    heterogeneity_scale=1.0,
+    seed_offset=8000,
+    tau=30.0,
+):
+    records = []
+    failures = []
+    for rep in range(n_repeats):
+        seed = int(seed_offset + 1000 * rep)
+        mu_true, gamma_true, U_true, V_true = make_presentation_parameters(
+            N,
+            K,
+            r_true,
+            random_seed=seed,
+            dgp="ours",
+            heterogeneity_scale=heterogeneity_scale,
+        )
+        S_true = compute_score_matrix(mu_true, gamma_true, U_true, V_true)
+        comparisons = generate_balanced_comparisons(S_true, T, random_seed=seed + 1)
+        n_ijk, y_ijk = comparisons_to_aggregated(comparisons, N, K)
+        fit_results = fit_ablation_methods_safe(N, K, r_true, n_ijk, y_ijk, tau=tau)
+
+        record = {
+            "rep": int(rep),
+            "seed": seed,
+            "T": int(T),
+            "heterogeneity_scale": float(heterogeneity_scale),
+            "u_operator_norm": float(np.linalg.norm(U_true, ord=2)) if U_true.size else 0.0,
+            "metrics": {},
+        }
+        for method_name, result in fit_results.items():
+            if result["fit"] is None:
+                failures.append({"rep": int(rep), "seed": seed, "method": method_name, "error": result["error"]})
+                continue
+            try:
+                record["metrics"][method_name] = compute_ablation_metrics(mu_true, S_true, result["fit"])
+            except Exception as exc:
+                failures.append({"rep": int(rep), "seed": seed, "method": method_name, "error": str(exc)})
+        records.append(record)
+
+    return {
+        "T": int(T),
+        "heterogeneity_scale": float(heterogeneity_scale),
+        "x_u_operator_norm": float(np.mean([record["u_operator_norm"] for record in records])) if records else 0.0,
+        "raw": records,
+        "summary": summarize_records_for_methods(records, ABLATION_METHOD_LABELS, ABLATION_METRICS),
+        "failures": failures,
+    }
+
+
 def presentation_series_from_conditions(conditions, x_key):
     series = {method_name: {metric: {"mean": [], "err": [], "n_success": []} for metric in PRESENTATION_METRICS} for method_name in METHOD_LABELS}
     x_values = []
@@ -649,6 +963,20 @@ def presentation_series_from_conditions(conditions, x_key):
         x_values.append(condition[x_key])
         for method_name in METHOD_LABELS:
             for metric_name in PRESENTATION_METRICS:
+                metric_summary = condition["summary"][method_name][metric_name]
+                series[method_name][metric_name]["mean"].append(np.nan if metric_summary["mean"] is None else metric_summary["mean"])
+                series[method_name][metric_name]["err"].append(np.nan if metric_summary["mc_ci95"] is None else metric_summary["mc_ci95"])
+                series[method_name][metric_name]["n_success"].append(metric_summary["n_success"])
+    return np.asarray(x_values, dtype=float), series
+
+
+def series_from_conditions(conditions, x_key, method_names, metric_names):
+    series = {method_name: {metric: {"mean": [], "err": [], "n_success": []} for metric in metric_names} for method_name in method_names}
+    x_values = []
+    for condition in conditions:
+        x_values.append(condition[x_key])
+        for method_name in method_names:
+            for metric_name in metric_names:
                 metric_summary = condition["summary"][method_name][metric_name]
                 series[method_name][metric_name]["mean"].append(np.nan if metric_summary["mean"] is None else metric_summary["mean"])
                 series[method_name][metric_name]["err"].append(np.nan if metric_summary["mc_ci95"] is None else metric_summary["mc_ci95"])
@@ -758,80 +1086,181 @@ def plot_ranking_panel(ax, x_values, series, x_label, title):
 def plot_presentation_grid(summary, save_path, dgp):
     apply_presentation_plot_style()
     if dgp == "ours":
-        fig, axes = plt.subplots(2, 4, figsize=(13.5, 6.0), squeeze=False)
+        fig, axes = plt.subplots(2, 5, figsize=(16.5, 6.0), squeeze=False)
         row_specs = [
-            ("ours_sample_size", "T", "Sample size T", "Ours DGP, sample size"),
-            ("ours_heterogeneity", "heterogeneity_scale", "Heterogeneity scale", "Ours DGP, heterogeneity"),
+            ("ours_sample_size", "T", "Sample Size (T)", True),
+            ("ours_heterogeneity", "heterogeneity_scale", "Heterogeneity scale", False),
         ]
     elif dgp == "zhou":
-        fig, axes = plt.subplots(1, 4, figsize=(13.5, 3.1), squeeze=False)
-        row_specs = [("zhou_sample_size", "T", "Sample size T", "Zhou DGP")]
+        fig, axes = plt.subplots(1, 5, figsize=(16.5, 3.1), squeeze=False)
+        row_specs = [("zhou_sample_size", "T", "Sample Size (T)", True)]
     else:
         raise ValueError(f"unknown plot DGP: {dgp}")
 
-    for row_idx, (section_key, x_key, x_label, row_title) in enumerate(row_specs):
+    title_specs = [
+        "Score recovery",
+        "Consensus ranking",
+        "Consensus ranking",
+        "Uncertainty calibration",
+        "Judge-specific behavior",
+    ]
+    y_label_specs = [
+        ("MSE", "#E74C3C"),
+        ("Spearman", "#27AE60"),
+        ("NDCG@N", "#27AE60"),
+        ("Coverage", "#27AE60"),
+        ("Accuracy", "#27AE60"),
+    ]
+    col_configs = [
+        ("mse", None),
+        ("spearman", (0.6, 1)),
+        ("ndcg", (0.9, 1)),
+        ("score_entry_coverage", (-0.05, 1.05)),
+        ("sign_accuracy", (-0.05, 1.05)),
+    ]
+
+    for row_idx, (section_key, x_key, x_label, show_title) in enumerate(row_specs):
         x_values, series = presentation_series_from_conditions(summary[section_key], x_key)
-        plot_metric_panel(axes[row_idx, 0], x_values, series, "mse", x_label, "MSE", f"{row_title}: MSE")
-        plot_ranking_panel(axes[row_idx, 1], x_values, series, x_label, f"{row_title}: ranking")
-        plot_metric_panel(
-            axes[row_idx, 2],
-            x_values,
-            series,
-            "score_entry_coverage",
-            x_label,
-            "Coverage",
-            f"{row_title}: score coverage",
-            ylim=(-0.05, 1.05),
+        for col_idx, (metric_name, ylim) in enumerate(col_configs):
+            y_label, y_color = y_label_specs[col_idx]
+            title = title_specs[col_idx] if show_title else ""
+            plot_metric_panel(
+                axes[row_idx, col_idx],
+                x_values,
+                series,
+                metric_name,
+                x_label,
+                y_label,
+                title,
+                ylim=ylim,
+            )
+            axes[row_idx, col_idx].yaxis.label.set_color(y_color)
+        axes[row_idx, 3].axhline(0.95, color="#4D4D4D", linestyle="--", linewidth=0.9, alpha=0.8)
+        axes[row_idx, 3].text(
+            0.02,
+            0.04,
+            "Unstructured BTL + SVD coverage omitted: no simple interval formula after truncated SVD.",
+            transform=axes[row_idx, 3].transAxes,
+            fontsize=6.5,
+            color="#555555",
+            va="bottom",
         )
-        axes[row_idx, 2].axhline(0.95, color="#4D4D4D", linestyle="--", linewidth=0.9, alpha=0.8)
-        plot_metric_panel(
-            axes[row_idx, 3],
-            x_values,
-            series,
-            "sign_accuracy",
-            x_label,
-            "Accuracy",
-            f"{row_title}: sign accuracy",
-            ylim=(-0.05, 1.05),
-        )
+
     method_handles = [
         Line2D(
             [0],
             [0],
-            color=METHOD_COLORS[method_name],
-            marker=PRESENTATION_MARKERS[method_name],
+            color=METHOD_COLORS[m],
+            marker=PRESENTATION_MARKERS[m],
             linewidth=1.8,
             markersize=4.6,
-            label=METHOD_LABELS[method_name],
+            label=METHOD_LABELS[m],
         )
-        for method_name in METHOD_LABELS
+        for m in METHOD_LABELS
     ]
-    metric_handles = [
-        Line2D([0], [0], color="#333333", linewidth=1.8, linestyle="-", label="Spearman"),
-        Line2D([0], [0], color="#333333", linewidth=1.8, linestyle="--", label="NDCG@N"),
-    ]
+    fig.tight_layout(w_pad=1.0, h_pad=1.5, rect=(0, 0, 1, 0.91))
     fig.legend(
         handles=method_handles,
         loc="upper center",
-        bbox_to_anchor=(0.42, 1.03),
+        bbox_to_anchor=(0.5, 0.99),
         ncol=len(method_handles),
         frameon=False,
         columnspacing=1.4,
         handlelength=1.8,
+        title="Methods",
     )
-    fig.legend(
-        handles=metric_handles,
-        loc="upper center",
-        bbox_to_anchor=(0.78, 1.03),
-        ncol=len(metric_handles),
-        frameon=False,
-        columnspacing=1.2,
-        handlelength=1.8,
-    )
-    fig.tight_layout(w_pad=1.0, h_pad=1.5, rect=(0, 0, 1, 0.96))
-    fig.savefig(save_path, dpi=300)
+    fig.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     return save_path
+
+
+def plot_ablation_grid(summary, save_path):
+    apply_presentation_plot_style()
+    fig, axes = plt.subplots(2, 4, figsize=(13.2, 6.0), squeeze=False)
+    row_specs = [
+        ("ours_sample_size", "T", "Sample Size (T)", True),
+        ("ours_heterogeneity", "heterogeneity_scale", "Heterogeneity scale", False),
+    ]
+    title_specs = [
+        "Score recovery",
+        "Consensus ranking",
+        "Consensus ranking",
+        "Judge-specific behavior",
+    ]
+    y_label_specs = [
+        ("MSE", "#E74C3C"),
+        ("Spearman", "#27AE60"),
+        ("NDCG@N", "#27AE60"),
+        ("Accuracy", "#27AE60"),
+    ]
+    col_configs = [
+        ("mse", None),
+        ("spearman", (0.6, 1)),
+        ("ndcg", (0.9, 1)),
+        ("sign_accuracy", (-0.05, 1.05)),
+    ]
+
+    for row_idx, (section_key, x_key, x_label, show_title) in enumerate(row_specs):
+        x_values, series = series_from_conditions(
+            summary[section_key],
+            x_key,
+            ABLATION_METHOD_LABELS,
+            ABLATION_METRICS,
+        )
+        for col_idx, (metric_name, ylim) in enumerate(col_configs):
+            ax = axes[row_idx, col_idx]
+            for method_name in ABLATION_METHOD_LABELS:
+                ax.errorbar(
+                    x_values,
+                    series[method_name][metric_name]["mean"],
+                    yerr=series[method_name][metric_name]["err"],
+                    marker=ABLATION_MARKERS[method_name],
+                    markersize=4.6,
+                    linewidth=1.8,
+                    capsize=2.5,
+                    capthick=0.9,
+                    elinewidth=0.9,
+                    label=ABLATION_METHOD_LABELS[method_name],
+                    color=ABLATION_METHOD_COLORS[method_name],
+                )
+            y_label, y_color = y_label_specs[col_idx]
+            ax.set_xlabel(x_label)
+            ax.set_ylabel(y_label)
+            ax.yaxis.label.set_color(y_color)
+            ax.set_title(title_specs[col_idx] if show_title else "")
+            if ylim is not None:
+                ax.set_ylim(*ylim)
+            polish_presentation_axis(ax)
+
+    method_handles = [
+        Line2D(
+            [0],
+            [0],
+            color=ABLATION_METHOD_COLORS[m],
+            marker=ABLATION_MARKERS[m],
+            linewidth=1.8,
+            markersize=4.6,
+            label=ABLATION_METHOD_LABELS[m],
+        )
+        for m in ABLATION_METHOD_LABELS
+    ]
+    fig.tight_layout(w_pad=1.0, h_pad=1.5, rect=(0, 0, 1, 0.91))
+    fig.legend(
+        handles=method_handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.99),
+        ncol=len(method_handles),
+        frameon=False,
+        columnspacing=1.4,
+        handlelength=1.8,
+        title="Methods",
+    )
+    fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    return save_path
+
+
+       
 
 
 def plot_presentation_simulation_from_summary(summary_path=None):
@@ -894,6 +1323,7 @@ def run_presentation_simulation(
             "T_fixed": int(T_fixed),
             "alpha": float(alpha),
             "error_bar": "mean +/- 1.96 * standard_error_across_repeats",
+            "coverage_notes": PRESENTATION_COVERAGE_NOTES,
         },
         "ours_sample_size": [],
         "ours_heterogeneity": [],
@@ -933,6 +1363,61 @@ def run_presentation_simulation(
     print(f"[presentation] wrote {summary_path}", flush=True)
     print(f"[presentation] wrote {ours_path}", flush=True)
     print(f"[presentation] wrote {zhou_path}", flush=True)
+    return results
+
+
+
+def run_reanchor_ablation_simulation(
+    N=8,
+    K=4,
+    r_true=1,
+    n_repeats=50,
+    T_list=None,
+    scale_list=None,
+    T_fixed=800,
+):
+    T_list = [400, 800, 1200, 1600, 2000, 2500, 3000] if T_list is None else [int(T) for T in T_list]
+    scale_list = [0.0, 0.5, 1.0, 2.0] if scale_list is None else [float(scale) for scale in scale_list]
+
+    results = {
+        "settings": {
+            "N": int(N),
+            "K": int(K),
+            "r_true": int(r_true),
+            "n_repeats": int(n_repeats),
+            "T_list": T_list,
+            "scale_list": scale_list,
+            "T_fixed": int(T_fixed),
+            "metrics": list(ABLATION_METRICS),
+            "methods": ABLATION_METHOD_LABELS,
+            "error_bar": "mean +/- 1.96 * standard_error_across_repeats",
+            "dgp": "ours",
+        },
+        "ours_sample_size": [],
+        "ours_heterogeneity": [],
+    }
+
+    for idx, T in enumerate(T_list):
+        print(f"[reanchor-ablation] ours DGP sample-size T={T}", flush=True)
+        results["ours_sample_size"].append(
+            run_ablation_condition(N, K, r_true, T, n_repeats, 1.0, seed_offset=810000 + 10000 * idx)
+        )
+    for idx, scale in enumerate(scale_list):
+        print(f"[reanchor-ablation] ours DGP heterogeneity scale={scale}", flush=True)
+        results["ours_heterogeneity"].append(
+            run_ablation_condition(N, K, r_true, T_fixed, n_repeats, scale, seed_offset=820000 + 10000 * idx)
+        )
+
+    results_dir = ensure_results_dir()
+    figure_path = os.path.join(results_dir, "reanchor_ablation_grid.png")
+    plot_ablation_grid(results, figure_path)
+    summary_path = os.path.join(results_dir, "reanchor_ablation_summary.json")
+    results["figures"] = {"reanchor_ablation_grid": figure_path}
+    results["summary_path"] = summary_path
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(to_jsonable(results), f, indent=2)
+    print(f"[reanchor-ablation] wrote {summary_path}", flush=True)
+    print(f"[reanchor-ablation] wrote {figure_path}", flush=True)
     return results
 
 
@@ -979,7 +1464,7 @@ def run_benchmark(experiments_to_run=
         if exp == "convergence_vs_T":
             convergence_vs_T = run_convergence_experiment(N, K, r_true, T_list, n_repeats)
         elif exp == "bic_rank_recovery":
-            bic_rank_recovery = run_bic_experiment(N, K, r_true, [100,200,300,400,500], n_repeats)
+            bic_rank_recovery = run_bic_experiment(N, K, r_true, [100, 150,200,250,300,400,500,600], n_repeats=50)
         elif exp == "sample_size_designs":
             sample_size_designs = run_sample_size_design_experiments(N, K, r_true, T_list, n_repeats)
         elif exp == "heterogeneity_levels":
@@ -1032,11 +1517,13 @@ def main():
     parser = argparse.ArgumentParser(description="Run synthetic simulation experiments.")
     parser.add_argument(
         "--experiment",
-        choices=["uq_coverage", "presentation"],
+        choices=["uq_coverage", "presentation", "convergence_likelihood", "reanchor_ablation"],
         default="uq_coverage",
         help="Experiment workflow to run.",
     )
     parser.add_argument("--presentation-smoke", action="store_true", help="Run a small presentation-figure smoke test.")
+    parser.add_argument("--ablation-smoke", action="store_true", help="Run a small reanchor-ablation smoke test.")
+    parser.add_argument("--convergence-smoke", action="store_true", help="Run a small likelihood-convergence smoke test.")
     parser.add_argument("--plot-only", action="store_true", help="Only redraw presentation PNGs from the saved summary JSON.")
     parser.add_argument(
         "--summary-path",
@@ -1044,6 +1531,7 @@ def main():
         help="Summary JSON to use with --plot-only; defaults to experiments/results/presentation_simulation_summary.json.",
     )
     parser.add_argument("--n-repeats", type=int, default=None, help="Override repeat count for presentation figures.")
+    parser.add_argument("--convergence-T", type=int, default=800, help="Sample size for likelihood-convergence traces.")
     parser.add_argument("--output-alpha", type=float, default=0.05, help="Interval alpha level for coverage metrics.")
     args = parser.parse_args()
 
@@ -1064,6 +1552,23 @@ def main():
             run_presentation_simulation(
                 n_repeats=50 if args.n_repeats is None else args.n_repeats,
                 alpha=args.output_alpha,
+            )
+    elif args.experiment == "convergence_likelihood":
+        run_likelihood_convergence_experiment(
+            T=args.convergence_T,
+            n_repeats=2 if args.convergence_smoke and args.n_repeats is None else (50 if args.n_repeats is None else args.n_repeats),
+        )
+    elif args.experiment == "reanchor_ablation":
+        if args.ablation_smoke:
+            run_reanchor_ablation_simulation(
+                n_repeats=2 if args.n_repeats is None else args.n_repeats,
+                T_list=[400, 800],
+                scale_list=[0.0, 1.0],
+                T_fixed=800,
+            )
+        else:
+            run_reanchor_ablation_simulation(
+                n_repeats=50 if args.n_repeats is None else args.n_repeats,
             )
     else:
         run_benchmark(["uq_coverage"])

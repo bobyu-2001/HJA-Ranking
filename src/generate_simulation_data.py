@@ -21,15 +21,6 @@ def validate_rank(N, K, r):
 
 
 
-def zero_sum_basis(dim):
-    if dim < 2:
-        raise ValueError(f"dim must be at least 2, got {dim}")
-    basis = np.zeros((dim, dim - 1), dtype=float)
-    basis[: dim - 1, : dim - 1] = np.eye(dim - 1)
-    basis[dim - 1, :] = -1.0
-    q, _ = np.linalg.qr(basis)
-    return q[:, : dim - 1]
-
 
 
 def _canonicalize_columns(matrix):

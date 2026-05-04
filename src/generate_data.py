@@ -233,22 +233,6 @@ def compute_top_k_stability(rankings, baseline_ranking, top_k, exact_match=True)
 
 
 
-def compute_top_k_stability_curve(rankings, baseline_ranking, max_top_k):
-    if not baseline_ranking:
-        raise ValueError("baseline_ranking must be non-empty")
-    max_top_k = max(1, min(int(max_top_k), len(baseline_ranking)))
-    curve = []
-    for top_k in range(1, max_top_k + 1):
-        stability = compute_top_k_stability(rankings, baseline_ranking, top_k)
-        curve.append(
-            {
-                "top_k": int(stability["top_k"]),
-                "exact_match_rate_vs_baseline_top_k": float(stability["exact_match_rate_vs_baseline_top_k"]),
-                "mean_jaccard_vs_baseline": float(stability["mean_jaccard_vs_baseline"]),
-            }
-        )
-    return curve
-
 
 
 def make_noisy_judge_records(source_records, judge_name, random_seed=42):

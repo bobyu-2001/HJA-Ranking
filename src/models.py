@@ -274,27 +274,11 @@ def reduce_judge_block(gamma, U):
 
 
 
-def expand_judge_block(gamma_reduced, U_reduced, K, r):
-    basis = make_centering_basis(K)
-    gamma = np.ones(K, dtype=float) + basis @ gamma_reduced
-    U = basis @ U_reduced.reshape(K - 1, r)
-    return gamma, U
-
-
-
 def reduce_item_block(mu, V):
     basis = make_centering_basis(mu.size)
     mu_reduced = basis.T @ np.asarray(mu, dtype=float)
     V_reduced = basis.T @ np.asarray(V, dtype=float)
     return mu_reduced, V_reduced
-
-
-
-def expand_item_block(mu_reduced, V_reduced, N, r):
-    basis = make_centering_basis(N)
-    mu = basis @ mu_reduced
-    V = basis @ V_reduced.reshape(N - 1, r)
-    return mu, V
 
 
 def alternating_mle(

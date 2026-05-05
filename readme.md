@@ -79,12 +79,13 @@ A Jupyter notebook that generates all camera-ready figures in the paper. It load
 numpy
 scipy
 matplotlib
+seaborn
 ```
 
 Install with:
 
 ```bash
-pip install numpy scipy matplotlib
+pip install numpy scipy matplotlib seaborn
 ```
 
 ---

@@ -148,6 +148,18 @@ def ensure_structured_bias_dataset_dir():
     return results_dir
 
 
+def ensure_stability_excluding_dir():
+    results_dir = os.path.join(ensure_results_dir(), "stability_excluding_zai_org")
+    os.makedirs(results_dir, exist_ok=True)
+    return results_dir
+
+
+def ensure_stability_excluding_heatmap_dir():
+    results_dir = os.path.join(ensure_stability_excluding_dir(), "proposed_uvt_heatmaps")
+    os.makedirs(results_dir, exist_ok=True)
+    return results_dir
+
+
 
 def infer_model_rank(N, K):
     return 0 if min(K - 1, N - 2) <= 0 else 1
@@ -520,15 +532,34 @@ def serialize_method_result(fit_result, test_records, item_names):
 
 
 
-def plot_proposed_uvt_heatmap(dataset_name, judge_names, item_names, fit):
+def plot_proposed_uvt_heatmap(dataset_name, judge_names, item_names, fit, output_dir=None, sort_rows=True, sort_cols=True):
     U = np.asarray(fit["U"], dtype=float)
     V = np.asarray(fit["V"], dtype=float)
-    output_path = os.path.join(ensure_proposed_heatmap_dir(), f"{dataset_name}.png")
+    heatmap_dir = output_dir if output_dir is not None else ensure_proposed_heatmap_dir()
+    output_path = os.path.join(heatmap_dir, f"{dataset_name}.png")
 
     if U.ndim != 2 or V.ndim != 2 or U.shape[1] == 0 or V.shape[1] == 0:
         heterogeneity = np.zeros((len(judge_names), len(item_names)), dtype=float)
     else:
         heterogeneity = U @ V.T
+
+    # Sort rows / columns by their own mean heterogeneity (warm → top-left)
+    item_order = list(range(len(item_names)))
+    judge_order = list(range(len(judge_names)))
+    item_labels = list(item_names)
+    judge_labels = list(judge_names)
+
+    if sort_cols and heterogeneity.size > 0:
+        col_means = heterogeneity.mean(axis=0)
+        item_order = sorted(range(len(item_names)), key=lambda idx: float(col_means[idx]), reverse=True)
+        item_labels = [item_names[idx] for idx in item_order]
+        heterogeneity = heterogeneity[:, item_order]
+
+    if sort_rows and heterogeneity.size > 0:
+        row_means = heterogeneity.mean(axis=1)
+        judge_order = sorted(range(len(judge_names)), key=lambda idx: float(row_means[idx]), reverse=True)
+        judge_labels = [judge_names[idx] for idx in judge_order]
+        heterogeneity = heterogeneity[judge_order, :]
 
     absmax = float(np.max(np.abs(heterogeneity))) if heterogeneity.size else 0.0
     if absmax <= 0.0:
@@ -537,8 +568,8 @@ def plot_proposed_uvt_heatmap(dataset_name, judge_names, item_names, fit):
     plt.figure(figsize=(max(8, 0.35 * len(item_names)), max(4, 0.35 * len(judge_names))))
     plt.imshow(heterogeneity, aspect="auto", cmap="coolwarm", vmin=-absmax, vmax=absmax)
     plt.colorbar(label="U @ V.T")
-    plt.xticks(np.arange(len(item_names)), item_names, rotation=90, fontsize=7)
-    plt.yticks(np.arange(len(judge_names)), judge_names, fontsize=8)
+    plt.xticks(np.arange(len(item_labels)), item_labels, rotation=90, fontsize=7)
+    plt.yticks(np.arange(len(judge_labels)), judge_labels, fontsize=8)
     plt.xlabel("Items")
     plt.ylabel("Judges")
     plt.title(f"{dataset_name} Proposed heterogeneity heatmap (U @ V.T)")
@@ -549,7 +580,7 @@ def plot_proposed_uvt_heatmap(dataset_name, judge_names, item_names, fit):
 
 
 
-def plot_real_data_accuracy(stability_summary):
+def plot_real_data_accuracy(stability_summary, output_path=None, title_suffix=None):
     dataset_names = list(stability_summary.keys())
     method_names = list(METHOD_LABELS.keys())
     x = np.arange(len(dataset_names))
@@ -564,12 +595,16 @@ def plot_real_data_accuracy(stability_summary):
         plt.bar(x + (offset - 1) * width, values, width=width, label=METHOD_LABELS[method_name])
     plt.xticks(x, dataset_names, rotation=15)
     plt.ylabel("Test accuracy")
-    plt.title("Real-data stability experiment")
+    title = "Real-data stability experiment"
+    if title_suffix is not None:
+        title = f"{title} {title_suffix}"
+    plt.title(title)
     plt.ylim(0.0, 1.0)
     plt.grid(True, axis="y")
     plt.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join(ensure_results_dir(), "stability_accuracy.png"), dpi=150)
+    save_path = output_path if output_path is not None else os.path.join(ensure_results_dir(), "stability_accuracy.png")
+    plt.savefig(save_path, dpi=150)
     plt.close()
 
 
@@ -882,6 +917,113 @@ def run_real_data_stability_experiment(test_ratio=0.2, random_seed=42, dataset_n
             json.dump(merged_summary, f, indent=2)
         plot_real_data_accuracy(merged_summary)
         print(f"[dataset={current_dataset_name}] stability done in {merged_summary[current_dataset_name]['elapsed_seconds']:.2f}s", flush=True)
+
+    return merged_summary
+
+
+
+def run_stability_excluding_judge(test_ratio=0.2, random_seed=42, dataset_name=None, exclude_judges=None):
+    """Run stability experiment with specified judges excluded from the data.
+
+    Parameters
+    ----------
+    exclude_judges : list of str, optional
+        Judge names to exclude. Default: ['zai-org/GLM-4.5-Air-FP8']
+    """
+    if exclude_judges is None:
+        exclude_judges = ["zai-org/GLM-4.5-Air-FP8"]
+    exclude_set = set(exclude_judges)
+
+    output_dir = ensure_stability_excluding_dir()
+    output_path = os.path.join(output_dir, "stability_summary.json")
+    merged_summary = {}
+    if dataset_name is not None and os.path.exists(output_path):
+        with open(output_path, "r", encoding="utf-8") as f:
+            merged_summary = json.load(f)
+
+    for current_dataset_name, dataset_path in select_real_data_files(dataset_name).items():
+        print(f"[dataset={current_dataset_name}] loading dataset for stability (excluding judges: {exclude_judges})", flush=True)
+        dataset_start_time = time.perf_counter()
+        base_dataset = load_real_dataset(dataset_path)
+
+        # Filter out records from excluded judges
+        retained_records = [
+            record for record in base_dataset["records"]
+            if record.get("judge_model") not in exclude_set
+        ]
+        removed_count = len(base_dataset["records"]) - len(retained_records)
+        print(f"[dataset={current_dataset_name}] removed {removed_count} records from excluded judges (out of {len(base_dataset['records'])})", flush=True)
+
+        if not retained_records:
+            print(f"[dataset={current_dataset_name}] no records left after filtering, skipping", flush=True)
+            continue
+
+        # Rebuild dataset from filtered records
+        filtered_dataset = build_real_dataset_from_records(retained_records)
+        N = len(filtered_dataset["item_names"])
+        K = len(filtered_dataset["judge_names"])
+        print(f"[dataset={current_dataset_name}] after filtering: N={N}, K={K}, retained_judges={filtered_dataset['judge_names']}", flush=True)
+
+        # Train/test split
+        train_records, test_records = split_real_dataset(
+            filtered_dataset["processed"],
+            test_ratio=test_ratio,
+            random_seed=random_seed,
+        )
+
+        print(f"[dataset={current_dataset_name}] selecting proposed rank by 5-fold CV on training split", flush=True)
+        r_model, rank_selection = select_rank_by_cross_validation(
+            N,
+            K,
+            train_records,
+            n_folds=5,
+            random_seed=random_seed,
+        )
+
+        n_ijk, y_ijk = processed_records_to_aggregated(train_records, N, K)
+        fit_results = fit_all_methods_safe(N, K, r_model, n_ijk, y_ijk, max_iter=100)
+        method_summary = {
+            method_name: serialize_method_result(fit_result, test_records, filtered_dataset["item_names"])
+            for method_name, fit_result in fit_results.items()
+        }
+
+        # Generate heatmap
+        proposed_heatmap_path = None
+        proposed_fit_result = fit_results.get("proposed")
+        if proposed_fit_result is not None and proposed_fit_result["fit"] is not None:
+            proposed_heatmap_path = plot_proposed_uvt_heatmap(
+                current_dataset_name,
+                filtered_dataset["judge_names"],
+                filtered_dataset["item_names"],
+                proposed_fit_result["fit"],
+                output_dir=ensure_stability_excluding_heatmap_dir(),
+            )
+
+        merged_summary[current_dataset_name] = {
+            "dataset_path": dataset_path,
+            "excluded_judges": exclude_judges,
+            "original_num_judges": len(base_dataset["judge_names"]),
+            "retained_num_judges": K,
+            "retained_judge_names": filtered_dataset["judge_names"],
+            "num_items": N,
+            "train_size": len(train_records),
+            "test_size": len(test_records),
+            "rank_selection": rank_selection,
+            "elapsed_seconds": time.perf_counter() - dataset_start_time,
+            "proposed_uvt_heatmap_path": proposed_heatmap_path,
+            **filtered_dataset["summary"],
+            "methods": method_summary,
+        }
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(merged_summary, f, indent=2)
+
+        plot_real_data_accuracy(
+            merged_summary,
+            output_path=os.path.join(output_dir, "stability_accuracy.png"),
+            title_suffix="(excluding zai-org/GLM-4.5-Air-FP8)",
+        )
+        print(f"[dataset={current_dataset_name}] stability (excluding judges) done in {merged_summary[current_dataset_name]['elapsed_seconds']:.2f}s", flush=True)
 
     return merged_summary
 
@@ -2114,6 +2256,7 @@ def main():
             "anti_consensus_matched",
             "leave_one_family_out",
             "near_tie_slice",
+            "stability_excluding_zai_org",
             "all",
         ),
         default="stability",
@@ -2182,6 +2325,11 @@ def main():
         run_leave_one_family_out_experiment(
             dataset_name=args.dataset,
             min_family_judges=args.min_family_judges,
+            random_seed=args.random_seed,
+        )
+    elif args.experiment == "stability_excluding_zai_org":
+        run_stability_excluding_judge(
+            dataset_name=args.dataset,
             random_seed=args.random_seed,
         )
     elif args.experiment == "near_tie_slice":

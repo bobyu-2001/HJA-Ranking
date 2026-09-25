@@ -1,8 +1,8 @@
-# HJA-Ranking
+# HJA-Ranking: Heterogeneous Judge-Aware Ranking with Consensus, Sensitivity, and Confidence
 
 ## Overview
 
-This repository contains the official code for *Heterogeneous Judge-Aware Ranking with Sensitivity, Disagreement, and Confidence* (submitted to NeurIPS 2026). HJA is a structured multi-judge ranking framework that decomposes pairwise comparisons into a consensus ranking shared across judges, judge-specific sensitivity to consensus, and structured residual disagreement. The codebase supports synthetic data generation, model estimation (HJA, JA-Ranking, standard BTL, and unstructured baselines), uncertainty quantification, evaluation metrics, and reproduction of all experiments and figures in the paper.
+This repository contains the official code for *Heterogeneous Judge-Aware Ranking with Sensitivity, Disagreement, and Confidence* (NeurIPS 2026). HJA is a structured multi-judge ranking framework that decomposes pairwise comparisons into a consensus ranking shared across judges, judge-specific sensitivity to consensus, and structured residual disagreement, and asymptotic analysis supplying the confidence for the pipeline. The codebase supports synthetic data generation, model estimation (HJA, JA-Ranking, standard BTL, and unstructured baselines), uncertainty quantification, evaluation metrics, and reproduction of all experiments and figures in the paper.
 
 ---
 

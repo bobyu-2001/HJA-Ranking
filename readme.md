@@ -4,6 +4,26 @@
 
 This repository contains the official code for *Heterogeneous Judge-Aware Ranking with Sensitivity, Disagreement, and Confidence* (NeurIPS 2026). HJA is a structured multi-judge ranking framework that decomposes pairwise comparisons into a consensus ranking shared across judges, judge-specific sensitivity to consensus, and structured residual disagreement, and asymptotic analysis supplying the confidence for the pipeline. The codebase supports synthetic data generation, model estimation (HJA, JA-Ranking, standard BTL, and unstructured baselines), uncertainty quantification, evaluation metrics, and reproduction of all experiments and figures in the paper.
 
+### Method at a glance
+Let $[N]=\{1,\ldots,N\}$ and $[K]=\{1,\ldots,K\}$ index the items and the judges.
+For each judge $k\in[K]$ and unordered item pair $(i,j)$ with $1\le i<j\le N$, $n_{kij}$ denotes the number of repeated comparisons between items $i$ and $j$, and $Y_{kij}\in\{0,\ldots,n_{kij}\}$ denotes the number of times judge $k$ prefers item $i$ to item $j$. Write 
+$$\Omega := \\{(k,i,j): 1\le k\le K,\ 1\le i<j\le N,\ n_{kij}>0\\}$$
+to denote the comparison graph of the set of observed judge-item-pair triples, which is assumed to be connected for each judge (but not necessarily fully connected).
+
+We use a BTL model 
+
+$$
+Y_{kij}\sim \mathrm{Binomial}(n_{kij},p_{kij}), \qquad \mathrm{logit}(p_{kij})=S_{ki}-S_{kj}, \qquad (k,i,j)\in\Omega,
+$$
+
+and assume the score matrix
+
+$$
+S = \gamma \mu^\top + UV^\top, \text{s.t., } S1_N=0_K.
+$$
+
+Identification conditions, asymptotic properties of MLE, and local convergence of proximal anchored alternating MLE are established in the paper.
+
 ---
 
 ## Repository layout
